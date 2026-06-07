@@ -1,0 +1,22 @@
+{
+  "name": "wristcord",
+  "author": "dot-Justin",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": { "pebble-clay": "^1.0.4" },
+  "pebble": {
+    "displayName": "Wristcord",
+    "uuid": "da8247b9-80ed-4af8-968f-33b79d2a0483",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "watchapp": { "watchface": false },
+    "capabilities": ["configurable"],
+    "messageKeys": [
+      "OP", "ID", "PAGE", "MORE", "COUNT", "TEXT", "ERR",
+      "READY", "SET_THEME", "SET_ACCENT", "SET_POLL", "HAS_TOKEN", "CONSENT"
+    ],
+    "resources": { "media": [] }
+  }
+}
