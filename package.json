@@ -5,6 +5,7 @@
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": { "pebble-clay": "^1.0.4" },
+  "scripts": { "test": "node --test 'test/**/*.test.js'" },
   "pebble": {
     "displayName": "Wristcord",
     "uuid": "da8247b9-80ed-4af8-968f-33b79d2a0483",
