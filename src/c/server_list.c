@@ -177,6 +177,22 @@ static void draw_grid(GContext *ctx, GRect box, SRow *r) {
     graphics_fill_circle(ctx, GPoint(cx, cy), cell / 2);
   }
 }
+static void draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
+  // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
+  int cx = box.origin.x + box.size.w / 2;
+  int cy = box.origin.y + box.size.h / 2;
+  GPoint pts[3];
+  if (expanded) {                       // ▼ points down
+    pts[0] = GPoint(cx - 4, cy - 2); pts[1] = GPoint(cx + 4, cy - 2); pts[2] = GPoint(cx, cy + 3);
+  } else {                              // ▶ points right
+    pts[0] = GPoint(cx - 2, cy - 4); pts[1] = GPoint(cx - 2, cy + 4); pts[2] = GPoint(cx + 3, cy);
+  }
+  GPathInfo info = { .num_points = 3, .points = pts };
+  GPath *path = gpath_create(&info);
+  graphics_context_set_fill_color(ctx, color);
+  gpath_draw_filled(ctx, path);
+  gpath_destroy(path);
+}
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
@@ -189,9 +205,7 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
       GRect(b.origin.x + 34, b.origin.y + 4, b.size.w - 34 - 18, 22), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    const char *chev = csv_contains(s_expanded, r->id) ? "\xe2\x96\xbe" : "\xe2\x96\xb8";
-    graphics_draw_text(ctx, chev, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.size.w - 18, b.origin.y + 4, 16, 22), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+    draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), csv_contains(s_expanded, r->id), fg);
   } else {
     int indent = (r->parent >= 0) ? 14 : 0;
     char ini[3]; make_initials(r->name, ini);
