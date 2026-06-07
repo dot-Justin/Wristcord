@@ -49,24 +49,16 @@ function batches(rowString, maxLen) {
 
   for (var i = 0; i < records.length; i++) {
     var rec = records[i];
-    var addedLen = current.length === 0 ? rec.length : 1 + rec.length;  // RS + rec
 
     if (current.length === 0) {
-      // Starting a new chunk
+      // Starting a new chunk (a single over-long record lands here and gets its own chunk)
       current.push(rec);
       currentLen = rec.length;
-    } else if (currentLen + addedLen - rec.length + rec.length <= maxLen) {
-      // Equivalent: currentLen + 1 + rec.length <= maxLen
-      if (currentLen + 1 + rec.length <= maxLen) {
-        current.push(rec);
-        currentLen += 1 + rec.length;
-      } else {
-        // Flush current chunk, start new one
-        chunks.push(current.join(RS));
-        current = [rec];
-        currentLen = rec.length;
-      }
+    } else if (currentLen + 1 + rec.length <= maxLen) {  // + RS + rec
+      current.push(rec);
+      currentLen += 1 + rec.length;
     } else {
+      // Won't fit — flush current chunk and start a new one with this record
       chunks.push(current.join(RS));
       current = [rec];
       currentLen = rec.length;
