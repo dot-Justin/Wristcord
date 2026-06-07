@@ -2,6 +2,11 @@
 build/
 .pebble-cache/
 *.pbw
+.lock-waf_*
+
+# JS deps (pebble-clay pulled at build time)
+node_modules/
+package-lock.json
 
 # Editor / OS
 .DS_Store
