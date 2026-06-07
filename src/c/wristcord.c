@@ -15,6 +15,10 @@ static void render_state(void) {
     : "No token set.\nOpen Wristcord settings\nin the Pebble app.");
 }
 
+static void inbox_dropped(AppMessageResult reason, void *ctx) {
+  APP_LOG(APP_LOG_LEVEL_WARNING, "inbox dropped: %d", (int)reason);
+}
+
 static void inbox_received(DictionaryIterator *it, void *ctx) {
   wc_settings_apply_from_msg(it, &s_settings);
   wc_settings_save(&s_settings);
@@ -47,6 +51,7 @@ static void window_unload(Window *w) {
 static void init(void) {
   wc_settings_load(&s_settings);
   app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
   app_message_open(2048, 256);
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers){ .load = window_load, .unload = window_unload });

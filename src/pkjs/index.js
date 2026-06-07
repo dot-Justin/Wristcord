@@ -5,6 +5,7 @@ var customClay = require('../../config/custom-clay');
 var clay = new Clay(clayConfig, customClay, { autoHandleEvents: false });
 
 var settingsLib = require('./lib/settings');
+var clayLib = require('./lib/clay');
 
 function loadSettings() {
   try { return settingsLib.normalize(JSON.parse(localStorage.getItem('wc_settings') || '{}')); }
@@ -28,10 +29,8 @@ Pebble.addEventListener('showConfiguration', function () {
 });
 Pebble.addEventListener('webviewclosed', function (e) {
   if (!e || !e.response) return;
-  var dict = clay.getSettings(e.response, false); // raw values keyed by messageKey
-  var merged = settingsLib.normalize({
-    token: dict.token, theme: dict.theme, accent: dict.accent, pollSeconds: dict.pollSeconds
-  });
+  var dict = clay.getSettings(e.response, false); // raw values, each wrapped as {value: ...}
+  var merged = settingsLib.normalize(clayLib.unwrap(dict));
   saveSettings(merged);
   pushToWatch(merged);
 });
