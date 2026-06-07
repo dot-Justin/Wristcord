@@ -1,6 +1,7 @@
 // src/c/wristcord.c
 #include <pebble.h>
 #include "settings.h"
+#include "rows.h"
 
 static Window *s_window;
 static TextLayer *s_title, *s_state;
@@ -20,6 +21,7 @@ static void inbox_dropped(AppMessageResult reason, void *ctx) {
 }
 
 static void inbox_received(DictionaryIterator *it, void *ctx) {
+  wc_rows_handle_inbox(it);
   wc_settings_apply_from_msg(it, &s_settings);
   wc_settings_save(&s_settings);
   render_state();
