@@ -8,6 +8,12 @@ build/
 node_modules/
 package-lock.json
 
+# Secrets — Discord token for local testing. NEVER commit. (full account access)
+.secrets/
+*.token
+.env
+.env.*
+
 # Editor / OS
 .DS_Store
 
