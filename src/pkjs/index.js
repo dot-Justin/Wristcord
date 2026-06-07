@@ -6,6 +6,9 @@ var clay = new Clay(clayConfig, customClay, { autoHandleEvents: false });
 
 var settingsLib = require('./lib/settings');
 var clayLib = require('./lib/clay');
+var discordLib = require('./lib/discord');
+var model = require('./lib/model');
+var paging = require('./lib/paging');
 
 function loadSettings() {
   try { return settingsLib.normalize(JSON.parse(localStorage.getItem('wc_settings') || '{}')); }
@@ -35,4 +38,87 @@ Pebble.addEventListener('webviewclosed', function (e) {
   pushToWatch(merged);
 });
 
-// (M2+ will add the 'appmessage' OP router here.)
+// ---- Discord request adapter (XHR; attaches the user token) ----
+function makeXhrRequest(getToken) {
+  return function (method, path, body) {
+    return new Promise(function (resolve) {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, 'https://discord.com/api/v10' + path, true);
+      xhr.setRequestHeader('Authorization', getToken());
+      if (body) xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function () {
+        var j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+        resolve({ status: xhr.status, json: j });
+      };
+      xhr.onerror = function () { resolve({ status: 0, json: null }); };
+      xhr.send(body ? JSON.stringify(body) : null);
+    });
+  };
+}
+
+// ---- OP router with a simple page cache ----
+var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4;
+var MAX_ROWS_LEN = 1400;   // bytes of ROWS per batch (C inbox is 2048)
+var cacheKey = null, cacheBatches = [];
+
+function currentToken() { return loadSettings().token; }
+
+// returns { records: [...] } or { err: <code> }
+function buildRecords(op, id) {
+  var client = discordLib.makeClient(makeXhrRequest(currentToken));
+  function mapStatusErr(status) { return status === 401 ? 1 : (status === 429 ? 2 : 3); }
+  if (op === OP_GUILDS) {
+    return client.guilds().then(function (g) {
+      if (g.status !== 200) return { err: mapStatusErr(g.status) };
+      return client.userSettings().then(function (s) {
+        var rows = model.buildServerList(g.json, (s.status === 200 ? s.json : {}) || {});
+        return { records: rows.map(function (r) {
+          return [r.kind, r.id, r.name, r.color, r.parentIndex, (r.memberColors || []).join(',')];
+        }) };
+      });
+    });
+  }
+  if (op === OP_CHANNELS) {
+    return client.channels(id).then(function (ch) {
+      if (ch.status !== 200) return { err: mapStatusErr(ch.status) };
+      var rows = model.buildChannelTree(ch.json);
+      return { records: rows.map(function (r) { return [r.kind, r.id, r.name, r.parentIndex]; }) };
+    });
+  }
+  if (op === OP_MESSAGES) {
+    return client.messages(id, 20).then(function (m) {
+      if (m.status !== 200) return { err: mapStatusErr(m.status) };
+      var rows = model.packMessages(m.json);
+      return { records: rows.map(function (r) { return [r.author, r.color, r.time, r.text]; }) };
+    });
+  }
+  return Promise.resolve({ records: [] });
+}
+
+function sendPage(op, page) {
+  var rows = cacheBatches[page] || '';
+  var more = page < cacheBatches.length - 1 ? 1 : 0;
+  Pebble.sendAppMessage({ OP: op, PAGE: page, MORE: more, ROWS: rows });
+}
+
+Pebble.addEventListener('appmessage', function (e) {
+  var p = e.payload || {};
+  var op = p.OP, id = p.ID || '', page = p.PAGE || 0;
+  if (!op) return;                 // not a data request (e.g. settings echo)
+  if (op === OP_SEND) { return; }  // M6 (not implemented yet)
+
+  var key = op + ':' + id;
+  if (page === 0 || key !== cacheKey) {
+    buildRecords(op, id).then(function (res) {
+      if (res.err) { Pebble.sendAppMessage({ OP: op, PAGE: 0, MORE: 0, ROWS: '', ERR: res.err }); return; }
+      cacheKey = key;
+      cacheBatches = paging.batches(paging.encodeRows(res.records), MAX_ROWS_LEN);
+      if (cacheBatches.length === 0) cacheBatches = [''];
+      sendPage(op, page);
+    }).catch(function () {
+      Pebble.sendAppMessage({ OP: op, PAGE: 0, MORE: 0, ROWS: '', ERR: 3 });
+    });
+  } else {
+    sendPage(op, page);
+  }
+});
