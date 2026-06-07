@@ -1,0 +1,10 @@
+# Pebble build artifacts
+build/
+.pebble-cache/
+*.pbw
+
+# Editor / OS
+.DS_Store
+
+# Brainstorm scratch (visual companion)
+.superpowers/
