@@ -1,0 +1,230 @@
+// src/pkjs/lib/model.js
+// Pure transform module: Discord API responses -> flat row arrays for Pebble.
+// No IO, no globals.
+'use strict';
+
+var color = require('./color');
+var nameToAccentHex = color.nameToAccentHex;
+
+/**
+ * buildServerList(guilds, userSettings) -> flat ordered array of row objects.
+ *
+ * Row kinds:
+ *   {kind:'f', id, name, color, parentIndex:'', memberColors:[]}  -- folder
+ *   {kind:'g', id, name, color, parentIndex, memberColors:[]}     -- guild
+ */
+function buildServerList(guilds, userSettings) {
+  // Build id -> name lookup
+  var guildMap = {};
+  for (var i = 0; i < guilds.length; i++) {
+    guildMap[guilds[i].id] = guilds[i].name;
+  }
+
+  var folders = (userSettings && userSettings.guild_folders) || [];
+
+  // Fallback: no folder info -> return all guilds flat
+  if (!folders.length) {
+    return guilds.map(function(g) {
+      return {
+        kind: 'g',
+        id: g.id,
+        name: g.name,
+        color: nameToAccentHex(g.name),
+        parentIndex: '',
+        memberColors: [],
+      };
+    });
+  }
+
+  var rows = [];
+  var seen = {};  // guild ids referenced by folders
+
+  for (var fi = 0; fi < folders.length; fi++) {
+    var entry = folders[fi];
+    var guildIds = entry.guild_ids || [];
+
+    if (entry.id != null) {
+      // FOLDER row
+      var folderName = entry.name || 'Folder';
+
+      // Compute folder color
+      var folderColor;
+      if (typeof entry.color === 'number') {
+        // 0 is a valid colour (black)
+        var hex = (entry.color & 0xFFFFFF).toString(16).toUpperCase();
+        while (hex.length < 6) hex = '0' + hex;
+        folderColor = '0x' + hex;
+      } else {
+        // Fallback: first member's accent, or default
+        var firstMemberName = guildMap[guildIds[0]];
+        folderColor = firstMemberName
+          ? nameToAccentHex(firstMemberName)
+          : '0x5555FF';
+      }
+
+      // memberColors: up to first 4 guild_ids
+      var memberColors = [];
+      var maxDots = Math.min(guildIds.length, 4);
+      for (var m = 0; m < maxDots; m++) {
+        var mn = guildMap[guildIds[m]] || guildIds[m];
+        memberColors.push(nameToAccentHex(mn));
+      }
+
+      var folderIndex = rows.length;
+      rows.push({
+        kind: 'f',
+        id: String(entry.id),
+        name: folderName,
+        color: folderColor,
+        parentIndex: '',
+        memberColors: memberColors,
+      });
+
+      // Child guild rows
+      for (var gi = 0; gi < guildIds.length; gi++) {
+        var gid = guildIds[gi];
+        seen[gid] = true;
+        var gname = guildMap[gid] || gid;
+        rows.push({
+          kind: 'g',
+          id: gid,
+          name: gname,
+          color: nameToAccentHex(gname),
+          parentIndex: folderIndex,
+          memberColors: [],
+        });
+      }
+    } else {
+      // STANDALONE top-level guilds
+      for (var si = 0; si < guildIds.length; si++) {
+        var sgid = guildIds[si];
+        seen[sgid] = true;
+        var sgname = guildMap[sgid] || sgid;
+        rows.push({
+          kind: 'g',
+          id: sgid,
+          name: sgname,
+          color: nameToAccentHex(sgname),
+          parentIndex: '',
+          memberColors: [],
+        });
+      }
+    }
+  }
+
+  // Append orphan guilds (not referenced by any folder)
+  for (var oi = 0; oi < guilds.length; oi++) {
+    var og = guilds[oi];
+    if (!seen[og.id]) {
+      rows.push({
+        kind: 'g',
+        id: og.id,
+        name: og.name,
+        color: nameToAccentHex(og.name),
+        parentIndex: '',
+        memberColors: [],
+      });
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * buildChannelTree(channels) -> flat ordered array of row objects.
+ *
+ * Row kinds:
+ *   {kind:'c', id, name, parentIndex:''}              -- category
+ *   {kind:'t', id, name, parentIndex}                 -- text channel
+ */
+function buildChannelTree(channels) {
+  var TEXT_TYPES = { 0: true, 5: true };  // 5 = announcement, treat as text
+  var CAT_TYPE = 4;
+
+  var categories = [];
+  var uncategorized = [];
+  var byParent = {};
+
+  for (var i = 0; i < channels.length; i++) {
+    var ch = channels[i];
+    if (ch.type === CAT_TYPE) {
+      categories.push(ch);
+    } else if (TEXT_TYPES[ch.type]) {
+      if (!ch.parent_id) {
+        uncategorized.push(ch);
+      } else {
+        if (!byParent[ch.parent_id]) byParent[ch.parent_id] = [];
+        byParent[ch.parent_id].push(ch);
+      }
+    }
+    // All other types (voice etc.) are ignored
+  }
+
+  // Sort by position
+  uncategorized.sort(function(a, b) { return a.position - b.position; });
+  categories.sort(function(a, b) { return a.position - b.position; });
+
+  var rows = [];
+
+  // Uncategorized first
+  for (var ui = 0; ui < uncategorized.length; ui++) {
+    var u = uncategorized[ui];
+    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '' });
+  }
+
+  // Categories with their children
+  for (var ci = 0; ci < categories.length; ci++) {
+    var cat = categories[ci];
+    var catIndex = rows.length;
+    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '' });
+
+    var children = byParent[cat.id] || [];
+    children.sort(function(a, b) { return a.position - b.position; });
+    for (var ki = 0; ki < children.length; ki++) {
+      var ch2 = children[ki];
+      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex });
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * packMessages(messages) -> array, oldest first.
+ * Each: {author, color, time, text}
+ */
+function packMessages(messages) {
+  // Discord returns newest-first; reverse to oldest-first
+  var ordered = messages.slice().reverse();
+
+  return ordered.map(function(msg) {
+    var author = msg.author.global_name || msg.author.username;
+    var msgColor = nameToAccentHex(author);
+
+    // Parse timestamp UTC h:mm
+    var d = new Date(msg.timestamp);
+    var h = d.getUTCHours();
+    var m = d.getUTCMinutes();
+    var mm = m < 10 ? '0' + m : String(m);
+    var time = h + ':' + mm;
+
+    // Truncate content
+    var raw = msg.content;
+    var text;
+    if (!raw) {
+      text = '[no text]';
+    } else if (raw.length > 120) {
+      text = raw.slice(0, 120) + '…';  // '…'
+    } else {
+      text = raw;
+    }
+
+    return { author: author, color: msgColor, time: time, text: text };
+  });
+}
+
+module.exports = {
+  buildServerList: buildServerList,
+  buildChannelTree: buildChannelTree,
+  packMessages: packMessages,
+};
