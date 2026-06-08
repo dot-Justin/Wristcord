@@ -169,20 +169,20 @@ function buildChannelTree(channels) {
   // Uncategorized first
   for (var ui = 0; ui < uncategorized.length; ui++) {
     var u = uncategorized[ui];
-    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '' });
+    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '', lastMessageId: String(u.last_message_id || '') });
   }
 
   // Categories with their children
   for (var ci = 0; ci < categories.length; ci++) {
     var cat = categories[ci];
     var catIndex = rows.length;
-    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '' });
+    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '', lastMessageId: '' });
 
     var children = byParent[cat.id] || [];
     children.sort(function(a, b) { return a.position - b.position; });
     for (var ki = 0; ki < children.length; ki++) {
       var ch2 = children[ki];
-      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex });
+      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex, lastMessageId: String(ch2.last_message_id || '') });
     }
   }
 
@@ -234,16 +234,22 @@ function packMessages(messages) {
 
     // Clean and truncate content
     var cleaned = cleanText(msg.content, msg);
-    var text;
+    var full, text, truncated;
     if (!cleaned) {
+      full = '[no text]';
       text = '[no text]';
+      truncated = false;
     } else if (cleaned.length > 120) {
+      full = cleaned;
       text = cleaned.slice(0, 120) + '…';  // '…'
+      truncated = true;
     } else {
+      full = cleaned;
       text = cleaned;
+      truncated = false;
     }
 
-    return { author: author, color: msgColor, time: time, text: text };
+    return { author: author, color: msgColor, time: time, text: text, id: String(msg.id), full: full, truncated: truncated };
   });
 }
 

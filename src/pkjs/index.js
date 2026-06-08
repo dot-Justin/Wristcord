@@ -57,11 +57,14 @@ function makeXhrRequest(getToken) {
 }
 
 // ---- OP router with a simple page cache ----
-var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4;
+var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4, OP_MSG_FULL = 5;
 var MAX_ROWS_LEN = 1400;   // bytes of ROWS per batch (C inbox is 2048)
 var cacheKey = null, cacheBatches = [];
+var lastFullById = {};
 
 function currentToken() { return loadSettings().token; }
+
+function chunkText(s, size) { var out = []; for (var i = 0; i < s.length; i += size) out.push([s.slice(i, i + size)]); return out.length ? out : [['']]; }
 
 // returns { records: [...] } or { err: <code> }
 function buildRecords(op, id) {
@@ -82,15 +85,22 @@ function buildRecords(op, id) {
     return client.channels(id).then(function (ch) {
       if (ch.status !== 200) return { err: mapStatusErr(ch.status) };
       var rows = model.buildChannelTree(ch.json);
-      return { records: rows.map(function (r) { return [r.kind, r.id, r.name, r.parentIndex]; }) };
+      return { records: rows.map(function (r) { return [r.kind, r.id, r.name, r.parentIndex, r.lastMessageId || '']; }) };
     });
   }
   if (op === OP_MESSAGES) {
     return client.messages(id, 20).then(function (m) {
       if (m.status !== 200) return { err: mapStatusErr(m.status) };
       var rows = model.packMessages(m.json);
-      return { records: rows.map(function (r) { return [r.author, r.color, r.time, r.text]; }) };
+      lastFullById = {};
+      rows.forEach(function (r) { lastFullById[r.id] = r.full; });
+      return { records: rows.map(function (r) { return [r.author, r.color, r.time, r.text, r.id, r.truncated ? '1' : '0']; }) };
     });
+  }
+  if (op === OP_MSG_FULL) {
+    var fullText = lastFullById[id] || '(message unavailable)';
+    var chunks = chunkText(fullText, 100);
+    return Promise.resolve({ records: chunks });
   }
   return Promise.resolve({ records: [] });
 }
@@ -105,7 +115,16 @@ Pebble.addEventListener('appmessage', function (e) {
   var p = e.payload || {};
   var op = p.OP, id = p.ID || '', page = p.PAGE || 0;
   if (!op) return;                 // not a data request (e.g. settings echo)
-  if (op === OP_SEND) { return; }  // M6 (not implemented yet)
+  if (op === OP_SEND) {
+    var client = discordLib.makeClient(makeXhrRequest(currentToken));
+    client.sendMessage(id, p.TEXT || '').then(function (r) {
+      var ok = (r.status === 200 || r.status === 201);
+      Pebble.sendAppMessage({ OP: OP_SEND, PAGE: 0, MORE: 0, ROWS: '', ERR: ok ? 0 : (r.status === 401 ? 1 : (r.status === 429 ? 2 : 3)) });
+    }).catch(function () {
+      Pebble.sendAppMessage({ OP: OP_SEND, PAGE: 0, MORE: 0, ROWS: '', ERR: 3 });
+    });
+    return;
+  }
 
   var key = op + ':' + id;
   if (page === 0 || key !== cacheKey) {
