@@ -2,6 +2,7 @@
 #include "server_list.h"
 #include "rows.h"
 #include "ui_util.h"
+#include "channel_list.h"
 
 #define OP_GUILDS 1
 #define PK_EXPANDED 200
@@ -145,8 +146,7 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
     rebuild_visible();
     menu_layer_reload_data(m);
   } else {
-    APP_LOG(APP_LOG_LEVEL_INFO, "open guild %s (%s) -> channels in M4", r->name, r->id);
-    // M4: push channel list for r->id
+    channel_list_window_push(s_settings, r->id, r->name);
   }
 }
 
