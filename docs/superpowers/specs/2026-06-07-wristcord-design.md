@@ -272,4 +272,36 @@ Settings flow to pkjs on change and are mirrored to watch persist for instant st
 - Whether to optimistically append a just-sent message or wait for the next poll.
 - Onboarding tutorial card count/content.
 - Quick-messages fallback list contents (canned phrases / emoji set).
+
+---
+
+## 12. Chat interaction model (decided post-M5, for M6/M7)
+
+Selection in the chat list is **visible** (standard MenuLayer cursor). Input is symmetric across
+buttons and touch; **buttons are fully sufficient**, touch mirrors them 1:1 (only BACK stays a button).
+
+| Action | Button | Touch |
+|--------|--------|-------|
+| Move through messages | UP / DOWN | drag to scroll |
+| **Send a message to this channel** | **SELECT click** (always, regardless of cursor) | **tap** |
+| **Open a message's actions** | **SELECT long-press** (on highlighted msg) | **long-press** on the msg |
+| Back to channels | BACK | BACK |
+
+- MenuLayer's native `select_click` (send) + `select_long_click` (actions) cover the button side.
+  Touch needs custom tap-vs-hold hit-testing via `touch_service` (rows hit-tested by y).
+- **Per-message ActionMenu** (Pebble `ActionMenu`): `Read full message` (only when truncated),
+  then `Reply` and `React` are added in a later version. Reachable by both inputs, so no action
+  is touch-only.
+- **Read full message:** the chat list holds only truncated previews (~120 chars) with a dim
+  `…more` hint; selecting "Read full" opens a dedicated **scrollable detail screen** whose text
+  is fetched **on demand** — pkjs keeps the messages it already fetched and sends the full body
+  of the one requested message (paged via ROWS). Keeps the list payload small; handles 2000-char
+  messages.
+- **Compose** is `SELECT click` / `tap` → system dictation → Send/Redo/Cancel action-bar (M6).
+
+### Onboarding / help (M7)
+- First-run tutorial (the one deferred from M1): a few cards teaching navigate, click/tap =
+  send, long-press = message actions.
+- Re-viewable in-app via a small **app-level ActionMenu** (long-press on the server list)
+  holding **Help** and **Settings**.
 ```
