@@ -18,39 +18,61 @@ static AppTimer *s_send_timeout;
 static uint8_t s_mode;
 static int     s_fail_status;
 
+#define HINTW 54   // right-edge column reserved for per-button hint labels
+
 static Window    *s_win;
 static TextLayer *s_body;
+static Layer     *s_hints;             // right column: labels aligned to the 3 buttons
+static char s_hu[10], s_hs[10], s_hd[10];   // UP / SELECT / DOWN hint text ("" = none)
 
 static void start_dictation(void);
 
-static char s_disp[256];
+// Draw the button hints next to where each physical button sits (right edge):
+// UP ~ upper third, SELECT ~ middle, DOWN ~ lower third. SELECT (primary) in accent.
+static void hints_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  GColor fg = wc_theme_fg(s_settings);
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  graphics_context_set_stroke_color(ctx, wc_theme_muted(s_settings));
+  graphics_draw_line(ctx, GPoint(b.origin.x, 12), GPoint(b.origin.x, b.size.h - 12));
+  int h = b.size.h;
+  const char *labels[3] = { s_hu, s_hs, s_hd };
+  int ys[3] = { h * 18 / 100, h / 2, h * 82 / 100 };
+  for (int i = 0; i < 3; i++) {
+    if (!labels[i][0]) continue;
+    graphics_context_set_text_color(ctx, i == 1 ? s_settings->accent : fg);
+    graphics_draw_text(ctx, labels[i], f, GRect(b.origin.x + 2, ys[i] - 9, b.size.w - 4, 18),
+      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  }
+}
 
 static void set_body(void) {
   if (!s_body) return;
   const char *t = s_text;
-  if (s_mode == 0) {                       // result/confirm: show the text + what the buttons do
-    snprintf(s_disp, sizeof(s_disp), "%s\n\nSELECT = Send\nUP = Redo   DOWN = Cancel", s_text);
-    t = s_disp;
-  }
-  else if (s_mode == 2) t = "Sending...";
-  else if (s_mode == 3) t = "Send failed!\nSel=Retry Dn=Cancel";
-  else if (s_mode == 1) {
+  s_hu[0] = s_hs[0] = s_hd[0] = '\0';
+  if (s_mode == 0) {                       // confirm: show the detected text + button hints
+    t = s_text[0] ? s_text : "(no text)";
+    strcpy(s_hu, "Redo"); strcpy(s_hs, "Send"); strcpy(s_hd, "Cancel");
+  } else if (s_mode == 2) {
+    t = "Sending\xe2\x80\xa6";              // in flight — no actions
+  } else if (s_mode == 3) {
+    t = "Send failed.";
+    strcpy(s_hs, "Retry"); strcpy(s_hd, "Cancel");
+  } else if (s_mode == 1) {
+    strcpy(s_hs, "Retry"); strcpy(s_hd, "Cancel");
 #if defined(PBL_MICROPHONE)
     switch ((DictationSessionStatus)s_fail_status) {
-      case DictationSessionStatusFailureNoSpeechDetected:
-        t = "Didn't catch that.\nSel=Retry Dn=Cancel"; break;
-      case DictationSessionStatusFailureConnectivityError:
-        t = "No connection.\nSel=Retry Dn=Cancel"; break;
-      case DictationSessionStatusFailureDisabled:
-        t = "Voice disabled.\nSel=Retry Dn=Cancel"; break;
-      default:
-        t = "Dictation N/A.\nSel=Retry Dn=Cancel"; break;
+      case DictationSessionStatusFailureNoSpeechDetected: t = "Didn't catch that."; break;
+      case DictationSessionStatusFailureConnectivityError: t = "No connection.";    break;
+      case DictationSessionStatusFailureDisabled:          t = "Voice disabled.";   break;
+      default:                                             t = "Dictation N/A.";    break;
     }
 #else
-    t = "No microphone.\nSel=Retry Dn=Cancel";
+    t = "No microphone.";
 #endif
   }
   text_layer_set_text(s_body, t);
+  if (s_hints) layer_mark_dirty(s_hints);
 }
 
 static void send_timeout_cb(void *data) {
@@ -101,18 +123,24 @@ static void win_load(Window *w) {
   window_set_background_color(w, bg);
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  s_body = text_layer_create(GRect(4, 4, b.size.w-8, b.size.h-8));
-  text_layer_set_background_color(s_body, bg);
+  s_body = text_layer_create(GRect(5, 6, b.size.w - HINTW - 8, b.size.h - 12));
+  text_layer_set_background_color(s_body, GColorClear);
   text_layer_set_text_color(s_body, wc_theme_fg(s_settings));
   text_layer_set_font(s_body, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_body, GTextOverflowModeWordWrap);
-  set_body();
   layer_add_child(root, text_layer_get_layer(s_body));
+
+  s_hints = layer_create(GRect(b.size.w - HINTW, 0, HINTW, b.size.h));
+  layer_set_update_proc(s_hints, hints_update);
+  layer_add_child(root, s_hints);
+
+  set_body();
   window_set_click_config_provider(w, click_config);
 }
 static void win_unload(Window *w) {
   (void)w;
   if (s_send_timeout) { app_timer_cancel(s_send_timeout); s_send_timeout = NULL; }
+  layer_destroy(s_hints); s_hints = NULL;
   text_layer_destroy(s_body); s_body = NULL;
   window_destroy(s_win); s_win = NULL;
 }

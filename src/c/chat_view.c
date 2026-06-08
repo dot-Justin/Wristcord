@@ -31,6 +31,8 @@ static int             s_count;
 static int             s_width = 200;   // updated on window_load from bounds
 static LoadState       s_state;
 static int             s_err_code;
+static bool            s_fetching;   // guards against overlapping fetches (initial vs poll)
+static AppTimer       *s_poll;       // ambient refresh timer
 
 // ── ActionMenu state ──────────────────────────────────────────────────────────
 
@@ -76,7 +78,21 @@ static void open_action_menu(void) {
 // ── rows callbacks ────────────────────────────────────────────────────────────
 
 static void on_rows_done(WcRow *rows, int count) {
+  s_fetching = false;
   if (!s_menu) return;
+  // Was this an explicit (Loading) fetch, and was the user already at the newest msg?
+  // We only auto-scroll / disturb the view when appropriate, so ambient polls don't
+  // yank a user who has scrolled up to read history.
+  bool was_loading = (s_state != ST_READY);
+  bool at_bottom = was_loading;
+  if (!was_loading && s_count > 0) {
+    MenuIndex sel = menu_layer_get_selected_index(s_menu);
+    at_bottom = (sel.row >= s_count - 1);
+  }
+  char prev_newest[20];
+  strncpy(prev_newest, s_count > 0 ? s_msgs[s_count - 1].id : "", sizeof(prev_newest) - 1);
+  prev_newest[sizeof(prev_newest) - 1] = '\0';
+
   s_count = 0;
   for (int i = 0; i < count && s_count < WC_MAX_MSGS; i++) {
     WcRow *w = &rows[i];
@@ -91,25 +107,60 @@ static void on_rows_done(WcRow *rows, int count) {
     s_count++;
   }
   s_state = (s_count == 0) ? ST_EMPTY : ST_READY;
-  menu_layer_reload_data(s_menu);
-  if (s_count > 0) {
-    menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = s_count - 1 },
-                                  MenuRowAlignBottom, false);   // newest at bottom
-    wc_readstate_mark(s_channel_id, s_msgs[s_count - 1].id);   // mark channel read up to newest message
+
+  const char *new_newest = s_count > 0 ? s_msgs[s_count - 1].id : "";
+  bool changed = (strncmp(prev_newest, new_newest, sizeof(prev_newest)) != 0);
+
+  // Only repaint when something actually changed (or on the initial load) so an
+  // ambient poll never disturbs a user mid-scroll when there's nothing new.
+  if (was_loading || changed) {
+    menu_layer_reload_data(s_menu);
+    if (s_count > 0 && at_bottom) {
+      menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = s_count - 1 },
+                                    MenuRowAlignBottom, false);   // newest at bottom
+    }
   }
+  if (s_count > 0 && at_bottom) wc_readstate_mark(s_channel_id, s_msgs[s_count - 1].id);
 }
 
 static void on_rows_err(int code) {
+  s_fetching = false;
   if (!s_menu) return;
-  s_err_code = code;
-  s_state = ST_ERROR;
-  menu_layer_reload_data(s_menu);
+  if (s_state != ST_READY) {           // keep showing existing messages if a poll just failed
+    s_err_code = code;
+    s_state = ST_ERROR;
+    menu_layer_reload_data(s_menu);
+  }
 }
 
-static void start_fetch(void) {
-  s_state = ST_LOADING;
-  if (s_menu) menu_layer_reload_data(s_menu);
+// show_loading=true for the initial/explicit fetch (shows the Loading screen);
+// false for ambient polls (silent — keeps the current messages on screen).
+static void do_fetch(bool show_loading) {
+  if (s_fetching) return;              // never overlap fetches on the shared rows module
+  s_fetching = true;
+  if (show_loading) {
+    s_state = ST_LOADING;
+    if (s_menu) menu_layer_reload_data(s_menu);
+  }
   wc_rows_fetch(OP_MESSAGES, s_channel_id, on_rows_done, on_rows_err);
+}
+static void start_fetch(void) { do_fetch(true); }
+
+static void poll_cb(void *data) {
+  (void)data;
+  s_poll = NULL;
+  if (!s_window) return;
+  // Only fetch when the chat is actually on top — otherwise a sub-screen (read-full,
+  // compose) owns the shared rows module. Keep the timer alive so polling resumes
+  // when the user returns.
+  if (window_stack_get_top_window() == s_window) do_fetch(false);
+  int sec = s_settings->poll_seconds;
+  if (sec > 0) s_poll = app_timer_register((uint32_t)sec * 1000, poll_cb, NULL);
+}
+static void schedule_poll(void) {
+  if (s_poll) { app_timer_cancel(s_poll); s_poll = NULL; }
+  int sec = s_settings->poll_seconds;
+  if (sec > 0) s_poll = app_timer_register((uint32_t)sec * 1000, poll_cb, NULL);
 }
 
 // ── MenuLayer callbacks ───────────────────────────────────────────────────────
@@ -146,7 +197,12 @@ static void draw_status(GContext *ctx, const GRect b) {
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
-  if (s_state != ST_READY) { draw_status(ctx, b); return; }
+  if (s_state != ST_READY) {
+    graphics_context_set_fill_color(ctx, wc_theme_bg(s_settings));   // cover the accent highlight on the lone status cell
+    graphics_fill_rect(ctx, b, 0, GCornerNone);
+    draw_status(ctx, b);
+    return;
+  }
   Msg *msg = &s_msgs[ci->row];
   graphics_context_set_text_color(ctx, msg->color);
   graphics_draw_text(ctx, msg->author, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
@@ -205,11 +261,14 @@ static void window_load(Window *w) {
   s_titlebar = wc_titlebar_create(root, b, s_title, s_settings);
 
   start_fetch();
+  schedule_poll();    // ambient refresh while the channel is open (poll_seconds; 0 = off)
 }
 
 static void window_unload(Window *w) {
   (void)w;
+  if (s_poll) { app_timer_cancel(s_poll); s_poll = NULL; }
   wc_rows_cancel();   // drop any in-flight fetch -> no stale callback into this window
+  s_fetching = false;
   menu_layer_destroy(s_menu); s_menu = NULL;
   text_layer_destroy(s_titlebar); s_titlebar = NULL;
   window_destroy(s_window); s_window = NULL;
@@ -218,7 +277,7 @@ static void window_unload(Window *w) {
 // ── public interface ──────────────────────────────────────────────────────────
 
 void chat_view_refresh(void) {
-  if (s_menu) start_fetch();
+  if (s_menu) do_fetch(false);   // silent — the just-sent message appends without a Loading flash
 }
 
 // ── public entry point ────────────────────────────────────────────────────────

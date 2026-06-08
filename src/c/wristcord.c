@@ -4,7 +4,6 @@
 #include "rows.h"
 #include "server_list.h"
 #include "compose.h"
-#include "ui_util.h"
 
 static WristcordSettings s_settings;
 
@@ -20,13 +19,6 @@ static void outbox_failed(DictionaryIterator *it, AppMessageResult reason, void 
 
 static void inbox_received(DictionaryIterator *it, void *ctx) {
   (void)ctx;
-  Tuple *op = dict_find(it, MESSAGE_KEY_OP);
-  Tuple *rows = dict_find(it, MESSAGE_KEY_ROWS);
-  Tuple *err = dict_find(it, MESSAGE_KEY_ERR);
-  APP_LOG(APP_LOG_LEVEL_INFO, "inbox: op=%d rowslen=%d err=%d",
-          op ? (int)op->value->uint8 : -1,
-          rows ? (int)strlen(rows->value->cstring) : -1,
-          err ? (int)err->value->uint8 : -1);
   wc_rows_handle_inbox(it);
   wc_compose_handle_inbox(it);
   if (wc_settings_apply_from_msg(it, &s_settings)) {   // only on actual settings pushes, not row data
@@ -36,7 +28,6 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
 }
 
 static void init(void) {
-  wc_dbg_begin();                 // capture previous run's furthest stage, then reset
   wc_settings_load(&s_settings);
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
@@ -46,10 +37,7 @@ static void init(void) {
   uint32_t out_max = app_message_outbox_size_maximum();
   uint32_t in_sz = in_max < 2048 ? in_max : 2048;
   uint32_t out_sz = out_max < 256 ? out_max : 256;
-  AppMessageResult r = app_message_open(in_sz, out_sz);
-  APP_LOG(APP_LOG_LEVEL_INFO, "appmsg open=%d in=%d/%d out=%d/%d",
-          (int)r, (int)in_sz, (int)in_max, (int)out_sz, (int)out_max);
-  wc_dbg_stage(1);                // 1 = AppMessage opened
+  app_message_open(in_sz, out_sz);
   server_list_window_push(&s_settings);
 }
 

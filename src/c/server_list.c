@@ -32,6 +32,21 @@ static LoadState s_state;
 static int s_err_code;
 static char s_expanded[256];
 
+// Animated loading screen (logo + cycling accent dots).
+static GBitmap  *s_logo;
+static AppTimer *s_anim;
+static int       s_anim_frame;
+static void stop_loading_anim(void) { if (s_anim) { app_timer_cancel(s_anim); s_anim = NULL; } }
+static void anim_cb(void *d) {
+  (void)d; s_anim = NULL;
+  if (s_state == ST_LOADING) {
+    s_anim_frame++;
+    if (s_menu) layer_mark_dirty(menu_layer_get_layer(s_menu));
+    s_anim = app_timer_register(300, anim_cb, NULL);
+  }
+}
+static void start_loading_anim(void) { s_anim_frame = 0; stop_loading_anim(); s_anim = app_timer_register(300, anim_cb, NULL); }
+
 // ── Help/Settings action menu ─────────────────────────────────────────────────
 static ActionMenuLevel *s_am_level;
 
@@ -107,28 +122,21 @@ static void rebuild_visible(void) {
 
 // ---- rows callbacks ----
 static void on_rows_done(WcRow *rows, int count) {
-  wc_dbg_stage(7);                // 7 = building row models from parsed data
   s_all_count = 0;
   for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
-    // Fine breadcrumb: 1000 + row*10 + subphase. Decode: row=(N-1000)/10, sub=(N-1000)%10.
-    // sub 0=enter 1=after id 2=after name 3=after color/parent 4=after members(done)
-    wc_dbg_stage(1000 + i * 10 + 0);
     if (w->n_fields < 5) continue;
     SRow *r = &s_all[s_all_count];
     r->kind = w->fields[0][0];
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
-    wc_dbg_stage(1000 + i * 10 + 1);
     wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
-    wc_dbg_stage(1000 + i * 10 + 2);
     r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
     r->parent = (par && par[0]) ? wc_atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
-    wc_dbg_stage(1000 + i * 10 + 3);
     r->n_members = 0;
     if (w->n_fields >= 6 && w->fields[5][0]) {
-      // Parse the comma-joined hex list without strtok/strncpy (libc-free).
+      // Parse the comma-joined hex list without strtok/strncpy (libc-free; see ui_util).
       const char *p = w->fields[5];
       while (*p && r->n_members < 4) {
         r->members[r->n_members++] = wc_hex_to_color(p);   // stops at the comma
@@ -136,23 +144,22 @@ static void on_rows_done(WcRow *rows, int count) {
         if (*p == ',') p++; else break;
       }
     }
-    wc_dbg_stage(1000 + i * 10 + 4);
     s_all_count++;
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
-  wc_dbg_stage(8000);             // 8000 = build loop finished, entering rebuild_visible
+  stop_loading_anim();
   rebuild_visible();
-  wc_dbg_stage(8);                // 8 = models built, about to reload the menu (draw next)
   if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void on_rows_err(int code) {
-  APP_LOG(APP_LOG_LEVEL_WARNING, "rows_err: code=%d", code);
+  stop_loading_anim();
   s_err_code = code; s_state = ST_ERROR;
   if (s_menu) menu_layer_reload_data(s_menu);
 }
 
 static void start_fetch(void) {
   s_state = ST_LOADING;
+  start_loading_anim();
   if (s_menu) menu_layer_reload_data(s_menu);
   wc_rows_fetch(OP_GUILDS, "", on_rows_done, on_rows_err);
 }
@@ -164,22 +171,41 @@ static uint16_t get_num_rows(MenuLayer *m, uint16_t section, void *ctx) {
 }
 static int16_t get_cell_height(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   (void)m; (void)ctx;
-  if (s_state != ST_READY) return 140;
+  if (s_state != ST_READY) return 200;   // full-height status cell so content centers
   SRow *r = &s_all[s_visible[ci->row]];
   return r->kind == 'f' ? 30 : 42;
 }
-static char s_status_buf[64];
 static void draw_status(GContext *ctx, const GRect b) {
-  const char *msg = s_status_buf;
-  // Loading screen also reports the previous run's furthest stage, so a crash
-  // localizes itself with no device logs (see wc_dbg_* in ui_util).
-  snprintf(s_status_buf, sizeof(s_status_buf), "Loading\xe2\x80\xa6\n(prev stage: %d)", wc_dbg_prev());
-  if (s_state == ST_EMPTY) msg = "No servers found.";
-  else if (s_state == ST_NOTOKEN) msg = "No token set.\nOpen Wristcord settings\nin the Pebble app.";
-  else if (s_state == ST_ERROR) msg = (s_err_code == 1) ? "Sign-in failed.\nCheck your token." :
-                                      (s_err_code == 2) ? "Rate limited.\nTry again soon." :
-                                                          "Couldn't load servers.";
-  graphics_context_set_text_color(ctx, wc_theme_fg(s_settings));
+  GColor fg = wc_theme_fg(s_settings);
+
+  if (s_state == ST_LOADING) {
+    int cx = b.origin.x + b.size.w / 2;
+    bool show_logo = (s_logo && s_settings->theme != THEME_LIGHT);  // white logo invisible on light
+    int block_h = (show_logo ? 56 + 14 : 0) + 12 + 14 + 22;         // logo + gap + dots + gap + label
+    int top = b.origin.y + (b.size.h - block_h) / 2;
+    if (show_logo) {
+      graphics_context_set_compositing_mode(ctx, GCompOpSet);
+      graphics_draw_bitmap_in_rect(ctx, s_logo, GRect(cx - 28, top, 56, 56));
+      top += 56 + 14;
+    }
+    int gap = 16, dot_y = top + 6;                                  // 3 cycling dots
+    for (int i = 0; i < 3; i++) {
+      bool active = (i == (s_anim_frame % 3));
+      graphics_context_set_fill_color(ctx, active ? s_settings->accent : wc_theme_muted(s_settings));
+      graphics_fill_circle(ctx, GPoint(cx - gap + i * gap, dot_y), active ? 5 : 3);
+    }
+    graphics_context_set_text_color(ctx, fg);
+    graphics_draw_text(ctx, "Loading your servers\xe2\x80\xa6", fonts_get_system_font(FONT_KEY_GOTHIC_18),
+      GRect(b.origin.x + 6, dot_y + 12, b.size.w - 12, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+    return;
+  }
+
+  const char *msg = (s_state == ST_NOTOKEN) ? "No token set.\nOpen Wristcord settings\nin the Pebble app." :
+                    (s_state == ST_ERROR && s_err_code == 1) ? "Sign-in failed.\nCheck your token." :
+                    (s_state == ST_ERROR && s_err_code == 2) ? "Rate limited.\nTry again soon." :
+                    (s_state == ST_ERROR) ? "Couldn't load servers." :
+                                            "No servers found.";
+  graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, msg, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
     GRect(b.origin.x + 6, b.origin.y + 8, b.size.w - 12, b.size.h - 12),
     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
@@ -198,9 +224,14 @@ static void draw_grid(GContext *ctx, GRect box, SRow *r) {
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
-  if (s_state != ST_READY) { draw_status(ctx, b); return; }
-  static bool s_drew_once = false;
-  if (!s_drew_once) { s_drew_once = true; wc_dbg_stage(9); }   // 9 = first row actually drawing
+  if (s_state != ST_READY) {
+    // The lone status cell is "selected" -> MenuLayer paints it with the accent
+    // highlight; repaint the theme bg so the status art sits on a clean backdrop.
+    graphics_context_set_fill_color(ctx, wc_theme_bg(s_settings));
+    graphics_fill_rect(ctx, b, 0, GCornerNone);
+    draw_status(ctx, b);
+    return;
+  }
   SRow *r = &s_all[s_visible[ci->row]];
   bool selected = menu_cell_layer_is_highlighted(cell_layer);
   GColor fg = selected ? GColorWhite : wc_theme_fg(s_settings);
@@ -275,13 +306,15 @@ static void window_load(Window *w) {
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
   s_titlebar = wc_titlebar_create(root, b, s_titlebar_text, s_settings);
+  if (!s_logo) s_logo = gbitmap_create_with_resource(RESOURCE_ID_DISCORD_LOGO);
 
-  wc_dbg_stage(2);                // 2 = server-list window loaded, starting fetch
   if (s_settings->has_token) start_fetch();
   else { s_state = ST_NOTOKEN; menu_layer_reload_data(s_menu); }
 }
 static void window_unload(Window *w) {
   (void)w;
+  stop_loading_anim();
+  if (s_logo) { gbitmap_destroy(s_logo); s_logo = NULL; }
   menu_layer_destroy(s_menu); s_menu = NULL;
   text_layer_destroy(s_titlebar); s_titlebar = NULL;
 }

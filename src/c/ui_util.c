@@ -40,17 +40,6 @@ void wc_csv_remove(char *csv, const char *id) {
   strcpy(csv, out);
 }
 
-// ---- crash-localization breadcrumbs ----
-#define PK_DBG_STAGE 250
-static int s_dbg_prev = -1;
-int wc_dbg_begin(void) {
-  s_dbg_prev = persist_exists(PK_DBG_STAGE) ? persist_read_int(PK_DBG_STAGE) : 0;
-  persist_write_int(PK_DBG_STAGE, 0);
-  return s_dbg_prev;
-}
-void wc_dbg_stage(int n) { persist_write_int(PK_DBG_STAGE, n); }
-int wc_dbg_prev(void) { return s_dbg_prev; }
-
 // ---- rendering helpers ----
 // Hand-rolled hex parse — avoids the firmware-provided strtol(), which faults on
 // the new Core Devices PebbleOS (QEMU's strtol works, hence emulator-only success).
