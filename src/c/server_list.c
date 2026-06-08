@@ -1,6 +1,7 @@
 // src/c/server_list.c
 #include "server_list.h"
 #include "rows.h"
+#include "ui_util.h"
 
 #define OP_GUILDS 1
 #define PK_EXPANDED 200
@@ -29,65 +30,6 @@ static LoadState s_state;
 static int s_err_code;
 static char s_expanded[256];
 
-// ---- expanded-folder CSV helpers ----
-static bool csv_contains(const char *csv, const char *id) {
-  size_t idlen = strlen(id);
-  const char *p = csv;
-  while (*p) {
-    const char *comma = strchr(p, ',');
-    size_t seg = comma ? (size_t)(comma - p) : strlen(p);
-    if (seg == idlen && strncmp(p, id, idlen) == 0) return true;
-    if (!comma) break;
-    p = comma + 1;
-  }
-  return false;
-}
-static void csv_add(char *csv, size_t cap, const char *id) {
-  if (csv_contains(csv, id)) return;
-  size_t len = strlen(csv);
-  if (len + (len ? 1 : 0) + strlen(id) + 1 > cap) return;
-  if (len) strcat(csv, ",");
-  strcat(csv, id);
-}
-static void csv_remove(char *csv, const char *id) {
-  size_t idlen = strlen(id);
-  char out[256]; out[0] = '\0';
-  const char *p = csv;
-  while (*p) {
-    const char *comma = strchr(p, ',');
-    size_t seg = comma ? (size_t)(comma - p) : strlen(p);
-    bool match = (seg == idlen && strncmp(p, id, idlen) == 0);
-    if (!match && seg > 0) {
-      if (out[0]) strncat(out, ",", sizeof(out) - strlen(out) - 1);
-      strncat(out, p, seg);
-    }
-    if (!comma) break;
-    p = comma + 1;
-  }
-  strcpy(csv, out);
-}
-
-// ---- helpers ----
-static GColor hex_to_color(const char *s) {
-  uint32_t v = 0;
-  if (s && s[0]) v = (uint32_t)strtol(s, NULL, 16);
-  return GColorFromHEX(v);
-}
-static void make_initials(const char *name, char *out) {  // out[3]
-  out[0] = out[1] = out[2] = '\0';
-  int o = 0;
-  char c0 = name[0];
-  if (c0 >= 'a' && c0 <= 'z') c0 -= 32;
-  if (c0) out[o++] = c0;
-  for (const char *p = name; *p && o < 2; p++) {
-    if (*p == ' ' && *(p + 1)) {
-      char c = *(p + 1);
-      if (c >= 'a' && c <= 'z') c -= 32;
-      out[o++] = c; break;
-    }
-  }
-  out[o] = '\0';
-}
 
 static void rebuild_visible(void) {
   s_visible_count = 0;
@@ -95,7 +37,7 @@ static void rebuild_visible(void) {
     SRow *r = &s_all[i];
     bool show;
     if (r->parent < 0) show = true;                                  // folders + top-level guilds
-    else show = csv_contains(s_expanded, s_all[r->parent].id);       // child guild only if folder expanded
+    else show = wc_csv_contains(s_expanded, s_all[r->parent].id);       // child guild only if folder expanded
     if (show) s_visible[s_visible_count++] = i;
   }
 }
@@ -110,14 +52,14 @@ static void on_rows_done(WcRow *rows, int count) {
     r->kind = w->fields[0][0];
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
     strncpy(r->name, w->fields[2], sizeof(r->name) - 1); r->name[sizeof(r->name) - 1] = '\0';
-    r->color = hex_to_color(w->fields[3]);
+    r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
     r->parent = (par && par[0]) ? atoi(par) : -1;
     r->n_members = 0;
     if (w->n_fields >= 6 && w->fields[5][0]) {
       char tmp[80]; strncpy(tmp, w->fields[5], sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
       char *tok = strtok(tmp, ",");
-      while (tok && r->n_members < 4) { r->members[r->n_members++] = hex_to_color(tok); tok = strtok(NULL, ","); }
+      while (tok && r->n_members < 4) { r->members[r->n_members++] = wc_hex_to_color(tok); tok = strtok(NULL, ","); }
     }
     s_all_count++;
   }
@@ -159,13 +101,6 @@ static void draw_status(GContext *ctx, const GRect b) {
     GRect(b.origin.x + 6, b.origin.y + 8, b.size.w - 12, b.size.h - 12),
     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
-static void draw_dot(GContext *ctx, GPoint c, int radius, GColor color, const char *initials) {
-  graphics_context_set_fill_color(ctx, color);
-  graphics_fill_circle(ctx, c, radius);
-  graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_draw_text(ctx, initials, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-    GRect(c.x - radius, c.y - 9, radius * 2, 18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-}
 static void draw_grid(GContext *ctx, GRect box, SRow *r) {
   int d = 22, gap = 2, cell = (d - gap) / 2;
   int x0 = box.origin.x, y0 = box.origin.y + (box.size.h - d) / 2;
@@ -176,22 +111,6 @@ static void draw_grid(GContext *ctx, GRect box, SRow *r) {
     graphics_context_set_fill_color(ctx, col);
     graphics_fill_circle(ctx, GPoint(cx, cy), cell / 2);
   }
-}
-static void draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
-  // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
-  int cx = box.origin.x + box.size.w / 2;
-  int cy = box.origin.y + box.size.h / 2;
-  GPoint pts[3];
-  if (expanded) {                       // ▼ points down
-    pts[0] = GPoint(cx - 4, cy - 2); pts[1] = GPoint(cx + 4, cy - 2); pts[2] = GPoint(cx, cy + 3);
-  } else {                              // ▶ points right
-    pts[0] = GPoint(cx - 2, cy - 4); pts[1] = GPoint(cx - 2, cy + 4); pts[2] = GPoint(cx + 3, cy);
-  }
-  GPathInfo info = { .num_points = 3, .points = pts };
-  GPath *path = gpath_create(&info);
-  graphics_context_set_fill_color(ctx, color);
-  gpath_draw_filled(ctx, path);
-  gpath_destroy(path);
 }
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
@@ -205,11 +124,11 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
       GRect(b.origin.x + 34, b.origin.y + 4, b.size.w - 34 - 18, 22), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), csv_contains(s_expanded, r->id), fg);
+    wc_draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), wc_csv_contains(s_expanded, r->id), fg);
   } else {
     int indent = (r->parent >= 0) ? 14 : 0;
-    char ini[3]; make_initials(r->name, ini);
-    draw_dot(ctx, GPoint(b.origin.x + 6 + indent + 11, b.origin.y + b.size.h / 2), 11, r->color, ini);
+    char ini[3]; wc_make_initials(r->name, ini);
+    wc_draw_dot(ctx, GPoint(b.origin.x + 6 + indent + 11, b.origin.y + b.size.h / 2), 11, r->color, ini);
     graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(b.origin.x + indent + 34, b.origin.y + 9, b.size.w - indent - 38, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -220,8 +139,8 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   if (s_state != ST_READY) return;
   SRow *r = &s_all[s_visible[ci->row]];
   if (r->kind == 'f') {
-    if (csv_contains(s_expanded, r->id)) csv_remove(s_expanded, r->id);
-    else csv_add(s_expanded, sizeof(s_expanded), r->id);
+    if (wc_csv_contains(s_expanded, r->id)) wc_csv_remove(s_expanded, r->id);
+    else wc_csv_add(s_expanded, sizeof(s_expanded), r->id);
     persist_write_string(PK_EXPANDED, s_expanded);
     rebuild_visible();
     menu_layer_reload_data(m);
