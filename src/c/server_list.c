@@ -165,14 +165,17 @@ static void start_fetch(void) {
 }
 
 // ---- menu callbacks ----
+// Row 0 is the "Settings / Help" entry; rows 1..N are servers (or the status cell).
+// The Settings row is always present so the tutorial is reachable from any state.
 static uint16_t get_num_rows(MenuLayer *m, uint16_t section, void *ctx) {
   (void)m; (void)section; (void)ctx;
-  return s_state == ST_READY ? (uint16_t)s_visible_count : 1;
+  return 1 + (s_state == ST_READY ? (uint16_t)s_visible_count : 1);
 }
 static int16_t get_cell_height(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   (void)m; (void)ctx;
-  if (s_state != ST_READY) return 200;   // full-height status cell so content centers
-  SRow *r = &s_all[s_visible[ci->row]];
+  if (ci->row == 0) return 28;                          // compact Settings row
+  if (s_state != ST_READY) return 184;                  // status cell — fits below the Settings row in the viewport
+  SRow *r = &s_all[s_visible[ci->row - 1]];
   return r->kind == 'f' ? 30 : 42;
 }
 static void draw_status(GContext *ctx, const GRect b) {
@@ -210,6 +213,32 @@ static void draw_status(GContext *ctx, const GRect b) {
     GRect(b.origin.x + 6, b.origin.y + 8, b.size.w - 12, b.size.h - 12),
     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
+// Compact top entry: a 3-bar "menu" icon + "Settings" label + right chevron.
+// Clicking opens the existing Help/Settings action menu (Tutorial + Settings info).
+static void draw_settings_row(GContext *ctx, GRect b, bool selected) {
+  GColor accent = s_settings->accent;
+  GColor fg     = wc_theme_fg(s_settings);
+  GColor muted  = wc_theme_muted(s_settings);
+  // Icon: 3 stacked horizontal bars at the left.
+  int ix = b.origin.x + 8;
+  int iy = b.origin.y + b.size.h / 2 - 5;
+  graphics_context_set_fill_color(ctx, selected ? GColorWhite : accent);
+  for (int i = 0; i < 3; i++) graphics_fill_rect(ctx, GRect(ix, iy + i * 4, 12, 2), 0, GCornerNone);
+  // Label.
+  graphics_context_set_text_color(ctx, selected ? GColorWhite : fg);
+  graphics_draw_text(ctx, "Settings", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    GRect(b.origin.x + 28, b.origin.y + 4, b.size.w - 28 - 18, 22),
+    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  // Right chevron (action indicator).
+  wc_draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), false, selected ? GColorWhite : muted);
+  // Subtle divider under the row to visually separate it from the server list.
+  if (!selected) {
+    graphics_context_set_stroke_color(ctx, muted);
+    graphics_draw_line(ctx, GPoint(b.origin.x + 4, b.origin.y + b.size.h - 1),
+                            GPoint(b.origin.x + b.size.w - 4, b.origin.y + b.size.h - 1));
+  }
+}
+
 static void draw_grid(GContext *ctx, GRect box, SRow *r) {
   int d = 22, gap = 2, cell = (d - gap) / 2;
   int x0 = box.origin.x, y0 = box.origin.y + (box.size.h - d) / 2;
@@ -224,16 +253,18 @@ static void draw_grid(GContext *ctx, GRect box, SRow *r) {
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
+  bool selected = menu_cell_layer_is_highlighted(cell_layer);
+  if (ci->row == 0) { draw_settings_row(ctx, b, selected); return; }
   if (s_state != ST_READY) {
-    // The lone status cell is "selected" -> MenuLayer paints it with the accent
-    // highlight; repaint the theme bg so the status art sits on a clean backdrop.
+    // Status cell with no rows yet (loading / error / etc). MenuLayer paints it
+    // with the accent highlight when it's the selected cell, so repaint the theme
+    // bg first so the status art sits on a clean backdrop.
     graphics_context_set_fill_color(ctx, wc_theme_bg(s_settings));
     graphics_fill_rect(ctx, b, 0, GCornerNone);
     draw_status(ctx, b);
     return;
   }
-  SRow *r = &s_all[s_visible[ci->row]];
-  bool selected = menu_cell_layer_is_highlighted(cell_layer);
+  SRow *r = &s_all[s_visible[ci->row - 1]];
   GColor fg = selected ? GColorWhite : wc_theme_fg(s_settings);
   if (r->kind == 'f') {
     draw_grid(ctx, GRect(b.origin.x + 6, b.origin.y, 22, b.size.h), r);
@@ -252,8 +283,9 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
 }
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   (void)ctx;
+  if (ci->row == 0) { open_help_menu(); return; }   // Settings row -> Help/Tutorial menu
   if (s_state != ST_READY) return;
-  SRow *r = &s_all[s_visible[ci->row]];
+  SRow *r = &s_all[s_visible[ci->row - 1]];
   if (r->kind == 'f') {
     if (wc_csv_contains(s_expanded, r->id)) wc_csv_remove(s_expanded, r->id);
     else wc_csv_add(s_expanded, sizeof(s_expanded), r->id);
@@ -307,6 +339,9 @@ static void window_load(Window *w) {
   layer_add_child(root, menu_layer_get_layer(s_menu));
   s_titlebar = wc_titlebar_create(root, b, s_titlebar_text, s_settings);
   if (!s_logo) s_logo = gbitmap_create_with_resource(RESOURCE_ID_DISCORD_LOGO);
+  // Default selection on the first content row (a server / the loading cell), not
+  // the Settings row at index 0 — Settings sits above as a discoverable scroll-up.
+  menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = 1 }, MenuRowAlignNone, false);
 
   if (s_settings->has_token) start_fetch();
   else { s_state = ST_NOTOKEN; menu_layer_reload_data(s_menu); }

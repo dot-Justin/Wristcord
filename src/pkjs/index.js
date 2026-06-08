@@ -10,7 +10,16 @@ var discordLib = require('./lib/discord');
 var model = require('./lib/model');
 var paging = require('./lib/paging');
 
+// DEMO_MODE: routes Discord REST calls to a fake backend (lib/demo.js) instead of
+// the network. Used only to capture marketing screenshots — kept false for prod.
+// scripts/capture-store-shots.sh flips this and the C-side WC_DEMO sentinel.
+var DEMO_MODE = false;
+var demo = DEMO_MODE ? require('./lib/demo') : null;
+
 function loadSettings() {
+  // In demo mode, fake a token so the watch's has_token bit is set and the server
+  // list actually fetches (the demo backend ignores the token value itself).
+  if (DEMO_MODE) return settingsLib.normalize({ token: 'demo-token' });
   try { return settingsLib.normalize(JSON.parse(localStorage.getItem('wc_settings') || '{}')); }
   catch (e) { return settingsLib.normalize({}); }
 }
@@ -40,6 +49,10 @@ Pebble.addEventListener('webviewclosed', function (e) {
 
 // ---- Discord request adapter (XHR; attaches the user token) ----
 function makeXhrRequest(getToken) {
+  if (DEMO_MODE) {
+    // Marketing/screenshot mode — return canned responses; never touch the network.
+    return function (method, path) { return Promise.resolve(demo.respond(method, path)); };
+  }
   return function (method, path, body) {
     return new Promise(function (resolve) {
       var xhr = new XMLHttpRequest();

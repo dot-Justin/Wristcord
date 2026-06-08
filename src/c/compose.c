@@ -3,6 +3,11 @@
 #include "chat_view.h"
 #include "ui_util.h"
 
+// WC_DEMO: bypass dictation and jump straight to the confirm screen with a fixed
+// sample message. Used only by scripts/capture-store-shots.sh to grab the
+// confirm-screen marketing shot (no STT in the emulator). Kept 0 for prod.
+#define WC_DEMO 0
+
 #define OP_SEND  4
 // AppMessage keys are the SDK-generated MESSAGE_KEY_* (from package.json messageKeys),
 // NOT raw indices — using 0/1/2/3 silently misroutes the message so pkjs never sees it.
@@ -202,5 +207,10 @@ void chat_compose_start(WristcordSettings *settings, const char *channel_id,
   s_channel_id[sizeof(s_channel_id)-1] = '\0';
   wc_utf8_copy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name));
   s_text[0] = '\0'; s_sending = false;
+#if WC_DEMO
+  wc_utf8_copy(s_text, "Sounds great, see you at 7!", sizeof(s_text));
+  push_compose(0);
+#else
   start_dictation();
+#endif
 }
