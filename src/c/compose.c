@@ -3,16 +3,15 @@
 #include "chat_view.h"
 
 #define OP_SEND  4
-#define KEY_OP   0
-#define KEY_ID   1
-#define KEY_TEXT 2
-#define KEY_ERR  3
+// AppMessage keys are the SDK-generated MESSAGE_KEY_* (from package.json messageKeys),
+// NOT raw indices — using 0/1/2/3 silently misroutes the message so pkjs never sees it.
 
 static WristcordSettings *s_settings;
 static char s_channel_id[20];
 static char s_channel_name[28];
 static char s_text[200];
 static bool s_sending;
+static AppTimer *s_send_timeout;
 
 // 0=result, 1=fallback, 2=sending, 3=error
 static uint8_t s_mode;
@@ -47,16 +46,26 @@ static void set_body(void) {
   text_layer_set_text(s_body, t);
 }
 
+static void send_timeout_cb(void *data) {
+  (void)data;
+  s_send_timeout = NULL;
+  if (s_sending) { s_sending = false; s_mode = 3; set_body(); }  // no ack -> show failure, don't hang on "Sending..."
+}
+
 static void do_send(void) {
   s_sending = true; s_mode = 2; set_body();
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK || !out) {
     s_sending = false; s_mode = 3; set_body(); return;
   }
-  dict_write_uint8(out,   KEY_OP,   OP_SEND);
-  dict_write_cstring(out, KEY_ID,   s_channel_id);
-  dict_write_cstring(out, KEY_TEXT, s_text);
-  app_message_outbox_send();
+  dict_write_uint8(out,   MESSAGE_KEY_OP,   OP_SEND);
+  dict_write_cstring(out, MESSAGE_KEY_ID,   s_channel_id);
+  DictionaryResult dr = dict_write_cstring(out, MESSAGE_KEY_TEXT, s_text);
+  if (dr != DICT_OK || app_message_outbox_send() != APP_MSG_OK) {
+    s_sending = false; s_mode = 3; set_body(); return;       // outbox full / send failed
+  }
+  if (s_send_timeout) app_timer_cancel(s_send_timeout);
+  s_send_timeout = app_timer_register(8000, send_timeout_cb, NULL);  // bail if ack never arrives
 }
 
 static void on_select(ClickRecognizerRef r, void *ctx) {
@@ -96,6 +105,7 @@ static void win_load(Window *w) {
 }
 static void win_unload(Window *w) {
   (void)w;
+  if (s_send_timeout) { app_timer_cancel(s_send_timeout); s_send_timeout = NULL; }
   text_layer_destroy(s_body); s_body = NULL;
   window_destroy(s_win); s_win = NULL;
 }
@@ -137,9 +147,10 @@ static void start_dictation(void) { s_fail_status = 0; push_compose(1); }
 #endif
 
 void wc_compose_handle_inbox(DictionaryIterator *it) {
-  Tuple *op_t = dict_find(it, KEY_OP);
+  Tuple *op_t = dict_find(it, MESSAGE_KEY_OP);
   if (!op_t || op_t->value->uint8 != OP_SEND || !s_sending) return;
-  Tuple *err_t = dict_find(it, KEY_ERR);
+  if (s_send_timeout) { app_timer_cancel(s_send_timeout); s_send_timeout = NULL; }
+  Tuple *err_t = dict_find(it, MESSAGE_KEY_ERR);
   s_sending = false;
   if (err_t && err_t->value->uint8 == 0) {
     vibes_short_pulse();
