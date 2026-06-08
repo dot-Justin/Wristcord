@@ -190,6 +190,30 @@ function buildChannelTree(channels) {
 }
 
 /**
+ * cleanText(content, msg) -> plain string safe for Pebble display.
+ * Strips Discord markup, resolves mentions using msg.mentions.
+ */
+function cleanText(content, msg) {
+  if (!content) return '';
+  var byId = {};
+  ((msg && msg.mentions) || []).forEach(function (u) { byId[u.id] = u.global_name || u.username; });
+  return content
+    .replace(/<a?:(\w+):\d+>/g, ':$1:')                                   // custom emoji -> :name:
+    .replace(/<@!?(\d+)>/g, function (m, id) { return '@' + (byId[id] || 'user'); })  // user mention
+    .replace(/<@&\d+>/g, '@role')                                         // role mention
+    .replace(/<#\d+>/g, '#channel')                                       // channel mention
+    .replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, '$1')                       // code block
+    .replace(/`([^`]+)`/g, '$1')                                          // inline code
+    .replace(/\*\*(.+?)\*\*/g, '$1')                                      // bold
+    .replace(/__(.+?)__/g, '$1')                                          // underline
+    .replace(/~~(.+?)~~/g, '$1')                                          // strike
+    .replace(/\*(.+?)\*/g, '$1')                                          // italic
+    .replace(/^>\s?/gm, '')                                               // blockquote markers
+    .replace(/\s+/g, ' ')                                                 // collapse newlines/runs of whitespace
+    .trim();
+}
+
+/**
  * packMessages(messages) -> array, oldest first.
  * Each: {author, color, time, text}
  */
@@ -208,15 +232,15 @@ function packMessages(messages) {
     var mm = m < 10 ? '0' + m : String(m);
     var time = h + ':' + mm;
 
-    // Truncate content
-    var raw = msg.content;
+    // Clean and truncate content
+    var cleaned = cleanText(msg.content, msg);
     var text;
-    if (!raw) {
+    if (!cleaned) {
       text = '[no text]';
-    } else if (raw.length > 120) {
-      text = raw.slice(0, 120) + '…';  // '…'
+    } else if (cleaned.length > 120) {
+      text = cleaned.slice(0, 120) + '…';  // '…'
     } else {
-      text = raw;
+      text = cleaned;
     }
 
     return { author: author, color: msgColor, time: time, text: text };
@@ -227,4 +251,5 @@ module.exports = {
   buildServerList: buildServerList,
   buildChannelTree: buildChannelTree,
   packMessages: packMessages,
+  cleanText: cleanText,
 };

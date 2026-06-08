@@ -2,7 +2,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildServerList, buildChannelTree, packMessages } = require('../src/pkjs/lib/model');
+const { buildServerList, buildChannelTree, packMessages, cleanText } = require('../src/pkjs/lib/model');
 const { nameToAccentHex } = require('../src/pkjs/lib/color');
 
 // ---------------------------------------------------------------------------
@@ -265,4 +265,80 @@ test('packMessages: color is nameToAccentHex of author', () => {
     { author: { global_name: 'Zara', username: 'z' }, content: 'hi', timestamp: '2024-01-01T00:00:00.000Z' },
   ];
   assert.equal(packMessages(msg)[0].color, nameToAccentHex('Zara'));
+});
+
+// ---------------------------------------------------------------------------
+// cleanText
+// ---------------------------------------------------------------------------
+
+test('cleanText: resolves user mention via msg.mentions (global_name preferred)', () => {
+  assert.equal(
+    cleanText('hi <@42>', { mentions: [{ id: '42', username: 'bob', global_name: 'Bob' }] }),
+    'hi @Bob'
+  );
+});
+
+test('cleanText: unknown user mention falls back to @user', () => {
+  assert.equal(cleanText('hello <@99>', { mentions: [] }), 'hello @user');
+});
+
+test('cleanText: role mention -> @role', () => {
+  assert.equal(cleanText('ping <@&5>', null), 'ping @role');
+});
+
+test('cleanText: channel mention -> #channel', () => {
+  assert.equal(cleanText('see <#7>', null), 'see #channel');
+});
+
+test('cleanText: custom emoji -> :name:', () => {
+  assert.equal(cleanText('wow <:rocket:811>', null), 'wow :rocket:');
+});
+
+test('cleanText: animated emoji -> :name:', () => {
+  assert.equal(cleanText('wee <a:spin:1>', null), 'wee :spin:');
+});
+
+test('cleanText: strips **bold**', () => {
+  assert.equal(cleanText('**bold** text', null), 'bold text');
+});
+
+test('cleanText: strips *italic*', () => {
+  assert.equal(cleanText('*italic* text', null), 'italic text');
+});
+
+test('cleanText: strips __underline__', () => {
+  assert.equal(cleanText('__u__ text', null), 'u text');
+});
+
+test('cleanText: strips ~~strike~~', () => {
+  assert.equal(cleanText('~~s~~ text', null), 's text');
+});
+
+test('cleanText: strips inline code backticks -> inner text', () => {
+  assert.equal(cleanText('run `ls -la` now', null), 'run ls -la now');
+});
+
+test('cleanText: collapses newlines to single space', () => {
+  assert.equal(cleanText('a\n\nb', null), 'a b');
+});
+
+test('cleanText: empty string -> empty string', () => {
+  assert.equal(cleanText('', null), '');
+});
+
+test('cleanText: undefined/null content -> empty string', () => {
+  assert.equal(cleanText(null, null), '');
+  assert.equal(cleanText(undefined, null), '');
+});
+
+test('packMessages: cleans Discord markup in text field', () => {
+  const msg = [
+    {
+      author: { global_name: 'Alice', username: 'alice' },
+      content: '**hey** <@9>',
+      mentions: [{ id: '9', username: 'al', global_name: null }],
+      timestamp: '2024-01-01T00:00:00.000Z',
+    },
+  ];
+  assert.equal(packMessages(msg)[0].text, 'hey @al');
 });
