@@ -147,6 +147,42 @@ TextLayer *wc_titlebar_create(Layer *root, GRect bounds, const char *title, Wris
   return t;
 }
 
+void wc_draw_unread_indicator(GContext *ctx, GRect box, bool unread,
+                              int mention_count, bool selected,
+                              WristcordSettings *settings) {
+  if (mention_count <= 0 && !unread) return;
+  int cx = box.origin.x + box.size.w / 2;
+  int cy = box.origin.y + box.size.h / 2;
+  if (mention_count > 0) {
+    int r = 9;                                       // 18px diameter badge
+    graphics_context_set_fill_color(ctx, GColorRed); // Discord-ish red, contrasts on every theme
+    graphics_fill_circle(ctx, GPoint(cx, cy), r);
+    char buf[5];
+    if (mention_count > 99) {
+      // "99+" doesn't fit in the 18px circle; clamp to "99". Discord caps the
+      // visible badge similarly past 99 (with a "+" they have room for; we don't).
+      buf[0] = '9'; buf[1] = '9'; buf[2] = '\0';
+    } else if (mention_count > 9) {
+      buf[0] = '0' + (mention_count / 10);
+      buf[1] = '0' + (mention_count % 10);
+      buf[2] = '\0';
+    } else {
+      buf[0] = '0' + mention_count; buf[1] = '\0';
+    }
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+      GRect(cx - r, cy - 10, r * 2, 18),
+      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  } else {
+    // Plain unread dot: small filled circle, theme-aware so it disappears
+    // against the accent highlight on a selected row only when the accent is
+    // bright (white-on-white). Use white on dark themes, accent_fg on selected.
+    GColor color = selected ? GColorWhite : wc_theme_fg(settings);
+    graphics_context_set_fill_color(ctx, color);
+    graphics_fill_circle(ctx, GPoint(cx, cy), 3);
+  }
+}
+
 void wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
   // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
   int cx = box.origin.x + box.size.w / 2;

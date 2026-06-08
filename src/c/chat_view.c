@@ -7,6 +7,7 @@
 #include "readstate.h"
 
 #define OP_MESSAGES 3
+#define OP_ACK      6
 #define WC_MAX_MSGS 40    // we only fetch ~20 messages; small cap keeps Emery virtual_size (uint16) headroom
 
 typedef struct {
@@ -33,6 +34,7 @@ static LoadState       s_state;
 static int             s_err_code;
 static bool            s_fetching;   // guards against overlapping fetches (initial vs poll)
 static AppTimer       *s_poll;       // ambient refresh timer
+static char            s_acked_id[20];  // last message id we've ACK'd this session
 
 // ── ActionMenu state ──────────────────────────────────────────────────────────
 
@@ -120,7 +122,26 @@ static void on_rows_done(WcRow *rows, int count) {
                                     MenuRowAlignBottom, false);   // newest at bottom
     }
   }
-  if (s_count > 0 && at_bottom) wc_readstate_mark(s_channel_id, s_msgs[s_count - 1].id);
+  if (s_count > 0 && at_bottom) {
+    const char *newest = s_msgs[s_count - 1].id;
+    wc_readstate_mark(s_channel_id, newest);
+    // Fire-and-forget gateway ACK so other Discord clients (phone/desktop)
+    // reflect the read. Best-effort: outbox-busy/network failures are silent;
+    // the next gateway READY will reassert canonical truth either way. Only
+    // ACK each newest-id once per chat session to avoid spamming.
+    if (newest[0] && strncmp(newest, s_acked_id, sizeof(s_acked_id)) != 0) {
+      DictionaryIterator *out;
+      if (app_message_outbox_begin(&out) == APP_MSG_OK && out) {
+        dict_write_uint8(out,   MESSAGE_KEY_OP,   OP_ACK);
+        dict_write_cstring(out, MESSAGE_KEY_ID,   s_channel_id);
+        dict_write_cstring(out, MESSAGE_KEY_TEXT, newest);
+        if (app_message_outbox_send() == APP_MSG_OK) {
+          strncpy(s_acked_id, newest, sizeof(s_acked_id) - 1);
+          s_acked_id[sizeof(s_acked_id) - 1] = '\0';
+        }
+      }
+    }
+  }
 }
 
 static void on_rows_err(int code) {
@@ -287,6 +308,7 @@ void chat_view_window_push(WristcordSettings *settings, const char *channel_id, 
   strncpy(s_channel_id, channel_id ? channel_id : "", sizeof(s_channel_id) - 1);
   s_channel_id[sizeof(s_channel_id) - 1] = '\0';
   wc_utf8_copy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name));
+  s_acked_id[0] = '\0';
 
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));

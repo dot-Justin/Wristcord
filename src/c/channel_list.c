@@ -8,7 +8,18 @@
 #define OP_CHANNELS 2
 #define PK_COLLAPSED_CATS 201
 
-typedef struct { char kind; char id[20]; char name[28]; int parent; char last_message_id[20]; } CRow;
+typedef struct {
+  char kind;
+  char id[20];
+  char name[28];
+  int  parent;
+  char last_message_id[20];
+  // v1.1: gateway-supplied read state. -1 mention_count signals "no gateway
+  // data yet" so the C side falls back to the local-persist heuristic.
+  int  mention_count;
+  bool unread;
+  bool gateway_known;       // false => use local readstate fallback
+} CRow;
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR } LoadState;
 
 static Window *s_window;
@@ -50,10 +61,22 @@ static void on_rows_done(WcRow *rows, int count) {
     r->parent = (par && par[0]) ? wc_atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
     r->last_message_id[0] = '\0';
+    r->mention_count = 0;
+    r->unread = false;
+    r->gateway_known = false;
     if (w->n_fields >= 5 && w->fields[4][0]) {
       strncpy(r->last_message_id, w->fields[4], sizeof(r->last_message_id) - 1);
       r->last_message_id[sizeof(r->last_message_id) - 1] = '\0';
       if (r->kind == 't') wc_readstate_seed_if_absent(r->id, r->last_message_id);  // baseline on first sight
+    }
+    // v1.1 fields: [5]=unread '0'/'1'/'' [6]=mention_count decimal
+    if (w->n_fields >= 6 && w->fields[5][0]) {
+      r->gateway_known = true;
+      r->unread = (w->fields[5][0] == '1');
+    }
+    if (w->n_fields >= 7 && w->fields[6][0]) {
+      r->mention_count = wc_atoi(w->fields[6]);
+      if (r->mention_count < 0) r->mention_count = 0;
     }
     s_all_count++;
   }
@@ -105,18 +128,30 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), expanded, fg);
   } else {
     int indent = (r->parent >= 0) ? 16 : 0;
-    // v1: unread indicators are intentionally hidden because pure-REST tracking
-    // can't agree with Discord's canonical read state (reads on phone/desktop
-    // can't be detected without a gateway connection). v1.1 will re-enable this
-    // backed by a Discord gateway WebSocket in pkjs; the wc_readstate_* helpers
-    // still maintain local state so we can replace the source with one line.
+    // v1.1: unread / mention state comes from the gateway-supplied flags. When
+    // gateway hasn't sent READY yet, fall back to the local readstate heuristic
+    // so newly-arrived messages between launch and READY still show as unread.
+    bool unread; int mention_count;
+    if (r->gateway_known) {
+      unread = r->unread;
+      mention_count = r->mention_count;
+    } else {
+      unread = wc_readstate_is_unread(r->id, r->last_message_id);
+      mention_count = 0;
+    }
+    int badge_w = 22;                                  // right column reserved for dot/badge
     GColor hash = selected ? GColorWhite : wc_theme_muted(s_settings);
     graphics_context_set_text_color(ctx, hash);
     graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(b.origin.x + 14 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
     graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 14 + indent + 16, b.origin.y + 6, b.size.w - indent - 36, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+      GRect(b.origin.x + 14 + indent + 16, b.origin.y + 6,
+            b.size.w - indent - 36 - badge_w, 24),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    wc_draw_unread_indicator(ctx,
+      GRect(b.size.w - badge_w - 4, b.origin.y, badge_w, b.size.h),
+      unread, mention_count, selected, s_settings);
   }
 }
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
