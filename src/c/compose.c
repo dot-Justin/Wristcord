@@ -22,10 +22,16 @@ static TextLayer *s_body;
 
 static void start_dictation(void);
 
+static char s_disp[256];
+
 static void set_body(void) {
   if (!s_body) return;
   const char *t = s_text;
-  if (s_mode == 2) t = "Sending...";
+  if (s_mode == 0) {                       // result/confirm: show the text + what the buttons do
+    snprintf(s_disp, sizeof(s_disp), "%s\n\nSELECT = Send\nUP = Redo   DOWN = Cancel", s_text);
+    t = s_disp;
+  }
+  else if (s_mode == 2) t = "Sending...";
   else if (s_mode == 3) t = "Send failed!\nSel=Retry Dn=Cancel";
   else if (s_mode == 1) {
 #if defined(PBL_MICROPHONE)
