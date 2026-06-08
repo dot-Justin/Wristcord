@@ -1,19 +1,16 @@
 # Wristcord — Handoff
 
-**Last updated:** 2026-06-08 (v1.1 gateway implementation complete on branch)
+**Last updated:** 2026-06-08 (after v1.0.0 ship)
 
 ## Status
 
 **v1.0.0 is live on repebble.com.** Tag: `v1.0.0` at commit `8f9de62`. Store icon
 (`resources/icons/discord-80.png`) and dashboard polish landed in `092b864`.
 
-**v1.1 gateway implementation is complete on `feat/v1.1-gateway`** — pkjs Discord
-gateway WebSocket client (HELLO/HEARTBEAT/IDENTIFY/READY/RESUME/MESSAGE_ACK),
-canonical Discord unread dots on channel rows, red mention-count badges, and
-watch→Discord REST ack on read. Emulator-verified end-to-end against the live
-Discord API (gateway loads 1241 read_state entries; OP_CHANNELS join produces
-the correct unread/mention counts; ACK round-trip returns Discord 200). **Real
-hardware verification is the next step** before tagging v1.1.0 and publishing.
+The published PBW reads from your real Discord account on Pebble Time 2 hardware,
+voice-dictation send works, server/channel/chat/read-full/onboarding flows all
+verified live. Hard-won crash fix (firmware libc data-abort) is in. Unread
+indicators are **hidden in v1** until v1.1 ships gateway sync.
 
 App page: https://apps.rePebble.com/c61d68498f25458ebc9a2ec6
 Repo: https://github.com/dot-Justin/Wristcord
@@ -132,25 +129,7 @@ pebble publish --non-interactive --name "Wristcord" \
 25/56 px assets are too small; upload `resources/icons/discord-{80,144,256,512}.png`
 via the dashboard).
 
-## v1.1: The gateway WebSocket — IMPLEMENTED
-
-**Status as of 2026-06-08:** all the code below has been built. Branch
-`feat/v1.1-gateway` (3 commits on top of `v1.0.0`). 97 pkjs unit tests pass
-(was 73), no firmware-faulting symbols in the ELF, footprint = 58,218 bytes
-(+~2.4KB), free heap = 72,854 bytes. Emulator-verified end-to-end against
-the live Discord REST + gateway: 1241 read_state entries loaded; channel
-rows show the white unread dot for actually-unread channels; mention badges
-render with white-on-red numbers; `OP_ACK` round-trips to Discord and
-returns 200. Hardware verification is the next step.
-
-Files added/modified by v1.1:
-- New: `src/pkjs/lib/gateway.js`, `test/gateway.test.js`,
-  `docs/superpowers/specs/2026-06-08-wristcord-v1.1-gateway-design.md`
-- Modified: `src/pkjs/{index.js,lib/model.js,lib/discord.js}`,
-  `src/c/{channel_list.c,chat_view.c,rows.h,ui_util.{c,h}}`,
-  `test/{model.test.js,discord.test.js}`
-
-The original v1.1 roadmap from before implementation:
+## v1.1: The gateway WebSocket
 
 **The goal:** show canonical Discord unread state on the watch when the user
 opens Wristcord, and have watch reads sync back to Discord/phone. v1 hides
@@ -230,32 +209,6 @@ the user on 2026-06-08 — they explicitly endorsed this shape.
 - `GET /users/@me/mentions?limit=50` returns recent @-mentions across
   channels — useful fallback if gateway implementation drags but you want a
   "mentions inbox" indicator without a WS.
-
-## What's left for v1.1.0 release
-
-1. **Hardware verification on PT2.** Same drill as v1.0: install on real Pebble
-   Time 2, sign in, open a server with known phone/desktop reads, confirm the
-   dots match Discord truth. Open an unread channel, return to the channel
-   list, confirm the dot is gone (REST ACK round-trip propagated). Watch for
-   the firmware-libc gotcha — the `arm-none-eabi-nm` symbol check is green
-   but the only authoritative test is real hardware.
-2. **Bump version + tag + publish.**
-   - `package.json` version `1.0.0` → `1.1.0`
-   - Tag the merge commit `v1.1.0`
-   - `pebble publish --non-interactive --name "Wristcord" --release-notes
-     "<...>"` — the `--release-notes` should highlight cross-device unread
-     sync and mention badges. Keep the same UUID + category.
-3. **Update the memory `project_wristcord.md`** entry once it ships.
-4. **Squash or rebase commits if desired.** Three feat/test commits + the
-   spec/handoff commits sit cleanly on top of `main`. Merge as-is or squash.
-
-If anything regresses on hardware (gateway never reaches READY, dots never
-render, dots render but never clear), the most likely suspects in order:
-- pkjs WebSocket polyfill behavior differs from emulator (very unlikely —
-  it ships on every modern phone runtime).
-- Token scope: bot tokens won't work; this is a user-token selfbot only.
-- `app_message_outbox_begin` busy when `OP_ACK` fires — the code silently
-  drops the attempt and retries on the next on_rows_done. Harmless.
 
 ## Other backlog (post-v1.1)
 
