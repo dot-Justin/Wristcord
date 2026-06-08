@@ -18,6 +18,13 @@ void wc_readstate_mark(const char *channel_id, const char *newest_msg_id) {
   snprintf(val, sizeof(val), "%s%c%s", channel_id, SEP, newest_msg_id);  // "chan<SEP>seen"
   persist_write_string(key_for(channel_id), val);
 }
+// Establish a read baseline the first time we ever see a channel, so that only
+// activity *after* this point shows as unread (avoids "everything unread" noise).
+void wc_readstate_seed_if_absent(const char *channel_id, const char *last_message_id) {
+  if (!channel_id || !channel_id[0] || !last_message_id || !last_message_id[0]) return;
+  if (persist_exists(key_for(channel_id))) return;
+  wc_readstate_mark(channel_id, last_message_id);
+}
 bool wc_readstate_is_unread(const char *channel_id, const char *last_message_id) {
   if (!channel_id || !channel_id[0] || !last_message_id || !last_message_id[0]) return false;
   uint32_t k = key_for(channel_id);

@@ -7,3 +7,5 @@ void wc_readstate_mark(const char *channel_id, const char *newest_msg_id);
 bool wc_readstate_is_unread(const char *channel_id, const char *last_message_id);
 // snowflake "greater than": longer string = newer; same length = lexicographic.
 bool wc_snowflake_gt(const char *a, const char *b);
+// Seed a read baseline only if the channel has no stored state yet (first sight).
+void wc_readstate_seed_if_absent(const char *channel_id, const char *last_message_id);

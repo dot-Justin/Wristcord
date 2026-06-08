@@ -53,6 +53,7 @@ static void on_rows_done(WcRow *rows, int count) {
     if (w->n_fields >= 5 && w->fields[4][0]) {
       strncpy(r->last_message_id, w->fields[4], sizeof(r->last_message_id) - 1);
       r->last_message_id[sizeof(r->last_message_id) - 1] = '\0';
+      if (r->kind == 't') wc_readstate_seed_if_absent(r->id, r->last_message_id);  // baseline on first sight
     }
     s_all_count++;
   }
