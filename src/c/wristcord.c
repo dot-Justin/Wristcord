@@ -4,6 +4,7 @@
 #include "rows.h"
 #include "server_list.h"
 #include "compose.h"
+#include "ui_util.h"
 
 static WristcordSettings s_settings;
 
@@ -35,6 +36,7 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
 }
 
 static void init(void) {
+  wc_dbg_begin();                 // capture previous run's furthest stage, then reset
   wc_settings_load(&s_settings);
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
@@ -47,6 +49,7 @@ static void init(void) {
   AppMessageResult r = app_message_open(in_sz, out_sz);
   APP_LOG(APP_LOG_LEVEL_INFO, "appmsg open=%d in=%d/%d out=%d/%d",
           (int)r, (int)in_sz, (int)in_max, (int)out_sz, (int)out_max);
+  wc_dbg_stage(1);                // 1 = AppMessage opened
   server_list_window_push(&s_settings);
 }
 

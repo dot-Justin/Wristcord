@@ -15,6 +15,15 @@ GColor wc_hex_to_color(const char *s);
 void   wc_utf8_copy(char *dst, const char *src, size_t cap);
 
 void   wc_make_initials(const char *name, char *out, size_t cap);   // out should hold >=5 bytes
+
+// --- Crash-localization breadcrumbs (no device logs available) ---
+// Persisted stage survives an app fault. Call wc_dbg_begin() once at startup: it
+// captures the PREVIOUS run's furthest stage (shown on the Loading screen) then
+// resets. wc_dbg_stage(n) records progress; the highest n reached before a crash
+// is what the next launch reports.
+int    wc_dbg_begin(void);     // returns previous run's last stage
+void   wc_dbg_stage(int n);
+int    wc_dbg_prev(void);
 void   wc_draw_dot(GContext *ctx, GPoint center, int radius, GColor color, const char *initials);
 void   wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color);
 

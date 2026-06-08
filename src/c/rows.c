@@ -1,5 +1,6 @@
 // src/c/rows.c
 #include "rows.h"
+#include "ui_util.h"
 
 #define RS '\x1E'
 #define US '\x1F'
@@ -65,6 +66,7 @@ static void do_send(void *data) {
   dict_write_cstring(it, MESSAGE_KEY_ID, s_id);
   dict_write_uint8(it, MESSAGE_KEY_PAGE, s_page);
   app_message_outbox_send();
+  wc_dbg_stage(3);                // 3 = request sent to phone (awaiting response)
 }
 static void send_request(void) { do_send(NULL); }
 
@@ -103,12 +105,14 @@ static int parse_rows(void) {
 }
 
 void wc_rows_handle_inbox(DictionaryIterator *it) {
+  wc_dbg_stage(4);                      // 4 = an inbox message arrived
   Tuple *err = dict_find(it, MESSAGE_KEY_ERR);
   if (err) { if (s_active) { cancel_watchdog(); s_active = false; if (s_err) s_err((int)err->value->uint8); } return; }
   Tuple *op = dict_find(it, MESSAGE_KEY_OP);
   Tuple *rows = dict_find(it, MESSAGE_KEY_ROWS);
   if (!op || !rows) return;             // not a rows response (e.g. a settings push)
   if (!s_active) return;
+  wc_dbg_stage(5);                      // 5 = a ROWS data page is being handled
 
   const char *chunk = rows->value->cstring;
   int clen = chunk ? (int)strlen(chunk) : 0;
@@ -126,6 +130,7 @@ void wc_rows_handle_inbox(DictionaryIterator *it) {
   } else {
     cancel_watchdog();
     int c = parse_rows();
+    wc_dbg_stage(6);                     // 6 = all pages received + parsed
     s_active = false;
     if (s_done) s_done(s_rows, c);
   }

@@ -107,6 +107,7 @@ static void rebuild_visible(void) {
 
 // ---- rows callbacks ----
 static void on_rows_done(WcRow *rows, int count) {
+  wc_dbg_stage(7);                // 7 = building row models from parsed data
   s_all_count = 0;
   for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
@@ -129,6 +130,7 @@ static void on_rows_done(WcRow *rows, int count) {
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
   rebuild_visible();
+  wc_dbg_stage(8);                // 8 = models built, about to reload the menu (draw next)
   if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void on_rows_err(int code) {
@@ -154,8 +156,12 @@ static int16_t get_cell_height(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   SRow *r = &s_all[s_visible[ci->row]];
   return r->kind == 'f' ? 30 : 42;
 }
+static char s_status_buf[64];
 static void draw_status(GContext *ctx, const GRect b) {
-  const char *msg = "Loading\xe2\x80\xa6";
+  const char *msg = s_status_buf;
+  // Loading screen also reports the previous run's furthest stage, so a crash
+  // localizes itself with no device logs (see wc_dbg_* in ui_util).
+  snprintf(s_status_buf, sizeof(s_status_buf), "Loading\xe2\x80\xa6\n(prev stage: %d)", wc_dbg_prev());
   if (s_state == ST_EMPTY) msg = "No servers found.";
   else if (s_state == ST_NOTOKEN) msg = "No token set.\nOpen Wristcord settings\nin the Pebble app.";
   else if (s_state == ST_ERROR) msg = (s_err_code == 1) ? "Sign-in failed.\nCheck your token." :
@@ -181,6 +187,8 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
   if (s_state != ST_READY) { draw_status(ctx, b); return; }
+  static bool s_drew_once = false;
+  if (!s_drew_once) { s_drew_once = true; wc_dbg_stage(9); }   // 9 = first row actually drawing
   SRow *r = &s_all[s_visible[ci->row]];
   bool selected = menu_cell_layer_is_highlighted(cell_layer);
   GColor fg = selected ? GColorWhite : wc_theme_fg(s_settings);
@@ -256,6 +264,7 @@ static void window_load(Window *w) {
   layer_add_child(root, menu_layer_get_layer(s_menu));
   s_titlebar = wc_titlebar_create(root, b, s_titlebar_text, s_settings);
 
+  wc_dbg_stage(2);                // 2 = server-list window loaded, starting fetch
   if (s_settings->has_token) start_fetch();
   else { s_state = ST_NOTOKEN; menu_layer_reload_data(s_menu); }
 }
