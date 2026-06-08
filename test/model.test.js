@@ -193,6 +193,65 @@ test('buildChannelTree: empty channels array', () => {
   assert.deepEqual(buildChannelTree([]), []);
 });
 
+test('buildChannelTree: text rows include empty unread/mentionCount when no lookup passed', () => {
+  const rows = buildChannelTree([
+    { id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '999' },
+  ]);
+  assert.equal(rows[0].kind, 't');
+  assert.equal(rows[0].lastMessageId, '999');
+  assert.equal(rows[0].unread, '');
+  assert.equal(rows[0].mentionCount, '');
+});
+
+test('buildChannelTree: lookup-returns-null leaves unread/mentionCount empty (fallback path)', () => {
+  const rows = buildChannelTree(
+    [{ id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '999' }],
+    () => null
+  );
+  assert.equal(rows[0].unread, '');
+  assert.equal(rows[0].mentionCount, '');
+});
+
+test('buildChannelTree: lookup with newer last_message_id sets unread=1', () => {
+  const rows = buildChannelTree(
+    [{ id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '1000' }],
+    (id) => id === 't1' ? { lastReadId: '900', mentionCount: 0 } : null
+  );
+  assert.equal(rows[0].unread, '1');
+  assert.equal(rows[0].mentionCount, '0');
+});
+
+test('buildChannelTree: lookup with mention_count > 0 propagates as decimal string', () => {
+  const rows = buildChannelTree(
+    [{ id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '1000' }],
+    () => ({ lastReadId: '900', mentionCount: 5 })
+  );
+  assert.equal(rows[0].mentionCount, '5');
+});
+
+test('buildChannelTree: lookup with same lastReadId leaves unread=0', () => {
+  const rows = buildChannelTree(
+    [{ id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '900' }],
+    () => ({ lastReadId: '900', mentionCount: 0 })
+  );
+  assert.equal(rows[0].unread, '0');
+});
+
+test('buildChannelTree: category rows have empty unread/mentionCount even with lookup', () => {
+  const rows = buildChannelTree(
+    [
+      { id: 'cat', name: 'Stuff', type: 4, position: 0, parent_id: null },
+      { id: 't1', name: 'general', type: 0, position: 1, parent_id: 'cat', last_message_id: '1000' },
+    ],
+    () => ({ lastReadId: '900', mentionCount: 0 })
+  );
+  assert.equal(rows[0].kind, 'c');
+  assert.equal(rows[0].unread, '');
+  assert.equal(rows[0].mentionCount, '');
+  assert.equal(rows[1].kind, 't');
+  assert.equal(rows[1].unread, '1');
+});
+
 // ---------------------------------------------------------------------------
 // packMessages
 // ---------------------------------------------------------------------------
