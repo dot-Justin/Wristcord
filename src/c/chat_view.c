@@ -6,7 +6,7 @@
 #include "msg_view.h"
 
 #define OP_MESSAGES 3
-#define WC_MAX_MSGS 125   // keep below WC_MAX_ROWS to stay within Emery virtual_size uint16 budget
+#define WC_MAX_MSGS 40    // we only fetch ~20 messages; small cap keeps Emery virtual_size (uint16) headroom
 
 typedef struct {
   char  author[24];
