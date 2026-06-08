@@ -13,7 +13,7 @@ typedef struct {
 } WristcordSettings;
 
 void wc_settings_load(WristcordSettings *out);                 // from persist, with defaults
-void wc_settings_apply_from_msg(DictionaryIterator *it,        // from pkjs AppMessage
+bool wc_settings_apply_from_msg(DictionaryIterator *it,        // from pkjs AppMessage; true if any setting was present
                                 WristcordSettings *s);
 void wc_settings_save(const WristcordSettings *s);             // to persist
 GColor wc_theme_bg(const WristcordSettings *s);                // base background per theme

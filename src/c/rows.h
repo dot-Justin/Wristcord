@@ -16,3 +16,7 @@ void wc_rows_fetch(uint8_t op, const char *id, WcRowsDone done, WcRowsErr err);
 
 // Feed EVERY inbox dictionary here; it ignores messages that aren't row responses.
 void wc_rows_handle_inbox(DictionaryIterator *it);
+
+// Abort the in-flight fetch (cancels timers, drops callbacks) so a late or
+// retried response never fires into a destroyed window. Call from window unload.
+void wc_rows_cancel(void);

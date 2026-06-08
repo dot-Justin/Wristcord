@@ -121,6 +121,7 @@ static void window_load(Window *w) {
 }
 static void window_unload(Window *w) {
   (void)w;
+  wc_rows_cancel();                 // drop any in-flight fetch -> no stale callback into this window
   menu_layer_destroy(s_menu); s_menu = NULL;
   status_bar_layer_destroy(s_status_bar);
   window_destroy(s_window); s_window = NULL;

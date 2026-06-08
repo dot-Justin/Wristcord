@@ -15,6 +15,7 @@ static WcRowsErr s_err;
 static WcRow s_rows[WC_MAX_ROWS];
 
 static AppTimer *s_watchdog;
+static AppTimer *s_retry_timer;
 static int s_retries;
 static void send_request(void);
 
@@ -41,12 +42,23 @@ static void cancel_watchdog(void) {
   if (s_watchdog) { app_timer_cancel(s_watchdog); s_watchdog = NULL; }
 }
 
+// Abort any in-flight fetch: stop timers and drop callbacks so a popped window
+// never receives a stale response. Call from each window's unload.
+void wc_rows_cancel(void) {
+  cancel_watchdog();
+  if (s_retry_timer) { app_timer_cancel(s_retry_timer); s_retry_timer = NULL; }
+  s_active = false;
+  s_done = NULL;
+  s_err = NULL;
+}
+
 static void do_send(void *data) {
+  s_retry_timer = NULL;                  // this invocation consumed the pending retry (if any)
   if (!s_active) return;
   DictionaryIterator *it;
   AppMessageResult r = app_message_outbox_begin(&it);
   if (r != APP_MSG_OK) {                 // channel not ready / busy — retry shortly
-    app_timer_register(250, do_send, NULL);
+    s_retry_timer = app_timer_register(250, do_send, NULL);
     return;
   }
   dict_write_uint8(it, MESSAGE_KEY_OP, s_op);

@@ -47,6 +47,7 @@ static void on_rows_done(WcRow *rows, int count) {
     strncpy(r->name, w->fields[2], sizeof(r->name) - 1); r->name[sizeof(r->name) - 1] = '\0';
     const char *par = w->fields[3];
     r->parent = (par && par[0]) ? atoi(par) : -1;
+    if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
     s_all_count++;
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
@@ -145,6 +146,7 @@ static void window_load(Window *w) {
 }
 static void window_unload(Window *w) {
   (void)w;
+  wc_rows_cancel();                 // drop any in-flight fetch -> no stale callback into this window
   menu_layer_destroy(s_menu); s_menu = NULL;
   status_bar_layer_destroy(s_status_bar);
   window_destroy(s_window); s_window = NULL;

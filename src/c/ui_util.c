@@ -47,6 +47,7 @@ GColor wc_hex_to_color(const char *s) {
 }
 void wc_make_initials(const char *name, char *out) {  // out[3]
   out[0] = out[1] = out[2] = '\0';
+  if (!name) return;
   int o = 0;
   char c0 = name[0];
   if (c0 >= 'a' && c0 <= 'z') c0 -= 32;

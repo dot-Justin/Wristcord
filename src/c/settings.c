@@ -23,15 +23,18 @@ void wc_settings_save(const WristcordSettings *s) {
   persist_write_int(PK_HASTOK, s->has_token ? 1 : 0);
 }
 
-void wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
+bool wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
   Tuple *t;
-  if ((t = dict_find(it, MESSAGE_KEY_SET_THEME)))  s->theme = (WcTheme)t->value->int32;
+  bool changed = false;
+  if ((t = dict_find(it, MESSAGE_KEY_SET_THEME)))  { s->theme = (WcTheme)t->value->int32; changed = true; }
   if ((t = dict_find(it, MESSAGE_KEY_SET_ACCENT))) {
     s->accent_hex = (uint32_t)t->value->int32;
     s->accent = GColorFromHEX(s->accent_hex);
+    changed = true;
   }
-  if ((t = dict_find(it, MESSAGE_KEY_SET_POLL)))   s->poll_seconds = t->value->int32;
-  if ((t = dict_find(it, MESSAGE_KEY_HAS_TOKEN)))  s->has_token = (t->value->int32 != 0);
+  if ((t = dict_find(it, MESSAGE_KEY_SET_POLL)))   { s->poll_seconds = t->value->int32; changed = true; }
+  if ((t = dict_find(it, MESSAGE_KEY_HAS_TOKEN)))  { s->has_token = (t->value->int32 != 0); changed = true; }
+  return changed;
 }
 
 GColor wc_theme_bg(const WristcordSettings *s) {

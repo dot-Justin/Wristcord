@@ -14,9 +14,10 @@ static void inbox_dropped(AppMessageResult reason, void *ctx) {
 static void inbox_received(DictionaryIterator *it, void *ctx) {
   (void)ctx;
   wc_rows_handle_inbox(it);
-  wc_settings_apply_from_msg(it, &s_settings);
-  wc_settings_save(&s_settings);
-  server_list_handle_settings();
+  if (wc_settings_apply_from_msg(it, &s_settings)) {   // only on actual settings pushes, not row data
+    wc_settings_save(&s_settings);
+    server_list_handle_settings();
+  }
 }
 
 static void init(void) {

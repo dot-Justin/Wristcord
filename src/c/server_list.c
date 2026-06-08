@@ -56,6 +56,7 @@ static void on_rows_done(WcRow *rows, int count) {
     r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
     r->parent = (par && par[0]) ? atoi(par) : -1;
+    if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
     r->n_members = 0;
     if (w->n_fields >= 6 && w->fields[5][0]) {
       char tmp[80]; strncpy(tmp, w->fields[5], sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
