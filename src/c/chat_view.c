@@ -152,7 +152,7 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
   graphics_draw_text(ctx, msg->author, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
     GRect(b.origin.x + 6, b.origin.y + 1, b.size.w - 58, 16),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  graphics_context_set_text_color(ctx, GColorLightGray);
+  graphics_context_set_text_color(ctx, wc_theme_muted(s_settings));
   graphics_draw_text(ctx, msg->time, fonts_get_system_font(FONT_KEY_GOTHIC_14),
     GRect(b.size.w - 52, b.origin.y + 1, 46, 16),
     GTextOverflowModeFill, GTextAlignmentRight, NULL);

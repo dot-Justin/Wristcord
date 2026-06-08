@@ -47,3 +47,7 @@ GColor wc_theme_bg(const WristcordSettings *s) {
 GColor wc_theme_fg(const WristcordSettings *s) {
   return s->theme == THEME_LIGHT ? GColorBlack : GColorWhite;
 }
+GColor wc_theme_muted(const WristcordSettings *s) {
+  // Dark/Midnight: light-gray on near-black is readable; Light: dark-gray on white is readable
+  return s->theme == THEME_LIGHT ? GColorDarkGray : GColorLightGray;
+}

@@ -155,7 +155,7 @@ static void window_load(Window *w) {
   int footer_y = b.size.h - footer_h - 2;
   s_footer_layer = text_layer_create(GRect(4, footer_y, b.size.w - 50, footer_h));
   text_layer_set_background_color(s_footer_layer, GColorClear);
-  text_layer_set_text_color(s_footer_layer, GColorLightGray);
+  text_layer_set_text_color(s_footer_layer, wc_theme_muted(s_settings));
   text_layer_set_font(s_footer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_footer_layer, GTextAlignmentLeft);
   layer_add_child(root, text_layer_get_layer(s_footer_layer));
@@ -163,7 +163,7 @@ static void window_load(Window *w) {
   // ── Page counter (bottom-right) ───────────────────────────────────────────
   s_page_layer = text_layer_create(GRect(b.size.w - 46, footer_y, 42, footer_h));
   text_layer_set_background_color(s_page_layer, GColorClear);
-  text_layer_set_text_color(s_page_layer, GColorLightGray);
+  text_layer_set_text_color(s_page_layer, wc_theme_muted(s_settings));
   text_layer_set_font(s_page_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_page_layer, GTextAlignmentRight);
   layer_add_child(root, text_layer_get_layer(s_page_layer));

@@ -18,3 +18,4 @@ bool wc_settings_apply_from_msg(DictionaryIterator *it,        // from pkjs AppM
 void wc_settings_save(const WristcordSettings *s);             // to persist
 GColor wc_theme_bg(const WristcordSettings *s);                // base background per theme
 GColor wc_theme_fg(const WristcordSettings *s);                // base text per theme
+GColor wc_theme_muted(const WristcordSettings *s);             // dim text, legible on each theme bg
