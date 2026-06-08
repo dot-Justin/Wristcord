@@ -410,3 +410,18 @@ test('buildChannelTree: category row has empty lastMessageId', () => {
   const textRow = rows.find(r => r.kind === 't');
   assert.equal(textRow.lastMessageId, '777');
 });
+
+test('packMessages: image attachment shows [image] tag', () => {
+  const out = packMessages([{ id: '1', content: 'look', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [], attachments: [{ content_type: 'image/png', width: 10, height: 10 }] }]);
+  assert.equal(out[0].text, '[image] look');
+});
+
+test('packMessages: attachment with no caption -> just the tag', () => {
+  const out = packMessages([{ id: '2', content: '', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [], attachments: [{ filename: 'x.zip' }] }]);
+  assert.equal(out[0].text, '[attachment]');
+});
+
+test('packMessages: no attachment, no content -> [no text]', () => {
+  const out = packMessages([{ id: '3', content: '', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [] }]);
+  assert.equal(out[0].text, '[no text]');
+});

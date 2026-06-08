@@ -217,6 +217,18 @@ function cleanText(content, msg) {
  * packMessages(messages) -> array, oldest first.
  * Each: {author, color, time, text}
  */
+// Attachments/embeds can't be rendered on the watch — surface a clear text tag instead.
+function attachmentTag(msg) {
+  var atts = (msg && msg.attachments) || [];
+  var embeds = (msg && msg.embeds) || [];
+  var hasImage = atts.some(function (a) {
+    return (a.content_type && a.content_type.indexOf('image/') === 0) || (a.width && a.height);
+  }) || embeds.some(function (e) { return e.type === 'image' || e.image || e.thumbnail; });
+  if (hasImage) return '[image]';
+  if (atts.length) return '[attachment]';
+  return '';
+}
+
 function packMessages(messages) {
   // Discord returns newest-first; reverse to oldest-first
   var ordered = messages.slice().reverse();
@@ -232,20 +244,22 @@ function packMessages(messages) {
     var mm = m < 10 ? '0' + m : String(m);
     var time = h + ':' + mm;
 
-    // Clean and truncate content
+    // Clean content, prepend an attachment tag the watch can render (it can't show images).
     var cleaned = cleanText(msg.content, msg);
+    var tag = attachmentTag(msg);
+    var body = tag ? (cleaned ? tag + ' ' + cleaned : tag) : cleaned;
     var full, text, truncated;
-    if (!cleaned) {
+    if (!body) {
       full = '[no text]';
       text = '[no text]';
       truncated = false;
-    } else if (cleaned.length > 120) {
-      full = cleaned;
-      text = cleaned.slice(0, 120) + '…';  // '…'
+    } else if (body.length > 120) {
+      full = body;
+      text = body.slice(0, 120) + '…';  // '…'
       truncated = true;
     } else {
-      full = cleaned;
-      text = cleaned;
+      full = body;
+      text = body;
       truncated = false;
     }
 
