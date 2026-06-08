@@ -46,18 +46,60 @@ GColor wc_hex_to_color(const char *s) {
   if (s && s[0]) v = (uint32_t)strtol(s, NULL, 16);
   return GColorFromHEX(v);
 }
-void wc_make_initials(const char *name, char *out) {  // out[3]
-  out[0] = out[1] = out[2] = '\0';
-  if (!name) return;
+// Bytes in the UTF-8 code point that starts with lead byte c (1 for a
+// continuation/invalid lead, so callers always make forward progress).
+static int wc_utf8_cp_len(unsigned char c) {
+  if (c < 0x80)         return 1;   // 0xxxxxxx
+  if ((c >> 5) == 0x6)  return 2;   // 110xxxxx
+  if ((c >> 4) == 0xE)  return 3;   // 1110xxxx
+  if ((c >> 3) == 0x1E) return 4;   // 11110xxx
+  return 1;                         // continuation byte or invalid lead
+}
+
+void wc_utf8_copy(char *dst, const char *src, size_t cap) {
+  if (!cap) return;
+  if (!src) { dst[0] = '\0'; return; }
+  size_t max = cap - 1;
+  size_t n = 0;
+  while (src[n] && n < max) n++;
+  if (src[n]) {                                  // truncated mid-string
+    size_t i = n;                                // find the lead byte of the last code point
+    while (i > 0 && ((unsigned char)src[i - 1] & 0xC0) == 0x80) i--;
+    if (i > 0) {
+      size_t lead = i - 1;
+      int len = wc_utf8_cp_len((unsigned char)src[lead]);
+      if (lead + (size_t)len > n) n = lead;      // last code point is incomplete -> drop it
+    }
+  }
+  memcpy(dst, src, n);
+  dst[n] = '\0';
+}
+
+void wc_make_initials(const char *name, char *out, size_t cap) {  // out should hold >=5 bytes
+  if (cap) out[0] = '\0';
+  if (!name || !name[0] || cap < 2) return;
+  unsigned char c0 = (unsigned char)name[0];
+  if (c0 >= 0x80) {
+    // Leading multibyte code point (emoji/flag): copy it whole so initials stay
+    // valid UTF-8 (a lone lead byte crashes graphics_draw_text on hardware).
+    int len = wc_utf8_cp_len(c0);
+    int o = 0;
+    for (int i = 0; i < len && name[i] && (size_t)(o + 1) < cap; i++) out[o++] = name[i];
+    out[o] = '\0';
+    return;
+  }
+  // ASCII: first letter + first letter after a space (both uppercased).
   int o = 0;
-  char c0 = name[0];
-  if (c0 >= 'a' && c0 <= 'z') c0 -= 32;
-  if (c0) out[o++] = c0;
+  char a = name[0]; if (a >= 'a' && a <= 'z') a -= 32;
+  if ((size_t)(o + 1) < cap) out[o++] = a;
   for (const char *p = name; *p && o < 2; p++) {
     if (*p == ' ' && *(p + 1)) {
-      char c = *(p + 1);
-      if (c >= 'a' && c <= 'z') c -= 32;
-      out[o++] = c; break;
+      unsigned char b = (unsigned char)*(p + 1);
+      if (b < 0x80) {                            // only take an ASCII second initial
+        char bc = *(p + 1); if (bc >= 'a' && bc <= 'z') bc -= 32;
+        if ((size_t)(o + 1) < cap) out[o++] = bc;
+      }
+      break;
     }
   }
   out[o] = '\0';

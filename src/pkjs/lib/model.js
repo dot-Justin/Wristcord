@@ -255,7 +255,12 @@ function packMessages(messages) {
       truncated = false;
     } else if (body.length > 120) {
       full = body;
-      text = body.slice(0, 120) + '…';  // '…'
+      // Don't cut on a high surrogate — a lone surrogate becomes invalid UTF-8,
+      // which hard-faults graphics_draw_text on hardware.
+      var cut = 120;
+      var cc = body.charCodeAt(cut - 1);
+      if (cc >= 0xD800 && cc <= 0xDBFF) cut--;
+      text = body.slice(0, cut) + '…';  // '…'
       truncated = true;
     } else {
       full = body;

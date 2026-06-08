@@ -107,14 +107,6 @@ static void rebuild_visible(void) {
 
 // ---- rows callbacks ----
 static void on_rows_done(WcRow *rows, int count) {
-  APP_LOG(APP_LOG_LEVEL_INFO, "rows_done: count=%d", count);
-  if (count > 0) {
-    WcRow *w0 = &rows[0];
-    APP_LOG(APP_LOG_LEVEL_INFO, "row0: nf=%d color=[%s] name=[%s]",
-            w0->n_fields,
-            w0->n_fields > 3 ? w0->fields[3] : "?",
-            w0->n_fields > 2 ? w0->fields[2] : "?");
-  }
   s_all_count = 0;
   for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
@@ -122,7 +114,7 @@ static void on_rows_done(WcRow *rows, int count) {
     SRow *r = &s_all[s_all_count];
     r->kind = w->fields[0][0];
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
-    strncpy(r->name, w->fields[2], sizeof(r->name) - 1); r->name[sizeof(r->name) - 1] = '\0';
+    wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
     r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
     r->parent = (par && par[0]) ? atoi(par) : -1;
@@ -200,7 +192,7 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), wc_csv_contains(s_expanded, r->id), fg);
   } else {
     int indent = (r->parent >= 0) ? 14 : 0;
-    char ini[3]; wc_make_initials(r->name, ini);
+    char ini[8]; wc_make_initials(r->name, ini, sizeof(ini));
     wc_draw_dot(ctx, GPoint(b.origin.x + 6 + indent + 11, b.origin.y + b.size.h / 2), 11, r->color, ini);
     graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),

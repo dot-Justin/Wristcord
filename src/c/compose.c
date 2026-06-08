@@ -1,6 +1,7 @@
 // src/c/compose.c  — M6-T3: dictation -> confirm -> OP_SEND -> refresh
 #include "compose.h"
 #include "chat_view.h"
+#include "ui_util.h"
 
 #define OP_SEND  4
 // AppMessage keys are the SDK-generated MESSAGE_KEY_* (from package.json messageKeys),
@@ -130,8 +131,7 @@ static void dictation_cb(DictationSession *session, DictationSessionStatus statu
                          char *transcription, void *context) {
   (void)session; (void)context;
   if (status == DictationSessionStatusSuccess) {
-    strncpy(s_text, transcription, sizeof(s_text)-1);
-    s_text[sizeof(s_text)-1] = '\0';
+    wc_utf8_copy(s_text, transcription, sizeof(s_text));
     push_compose(0);
   } else {
     s_fail_status = (int)status; push_compose(1);
@@ -171,9 +171,8 @@ void chat_compose_start(WristcordSettings *settings, const char *channel_id,
                         const char *channel_name) {
   s_settings = settings;
   strncpy(s_channel_id,   channel_id   ? channel_id   : "", sizeof(s_channel_id)-1);
-  strncpy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name)-1);
   s_channel_id[sizeof(s_channel_id)-1] = '\0';
-  s_channel_name[sizeof(s_channel_name)-1] = '\0';
+  wc_utf8_copy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name));
   s_text[0] = '\0'; s_sending = false;
   start_dictation();
 }

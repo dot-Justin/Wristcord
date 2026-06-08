@@ -45,7 +45,7 @@ static void on_rows_done(WcRow *rows, int count) {
     CRow *r = &s_all[s_all_count];
     r->kind = w->fields[0][0];
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
-    strncpy(r->name, w->fields[2], sizeof(r->name) - 1); r->name[sizeof(r->name) - 1] = '\0';
+    wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
     const char *par = w->fields[3];
     r->parent = (par && par[0]) ? atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
@@ -175,7 +175,7 @@ static void window_unload(Window *w) {
 void channel_list_window_push(WristcordSettings *settings, const char *guild_id, const char *guild_name) {
   s_settings = settings;
   strncpy(s_guild_id, guild_id ? guild_id : "", sizeof(s_guild_id) - 1); s_guild_id[sizeof(s_guild_id) - 1] = '\0';
-  strncpy(s_guild_name, guild_name ? guild_name : "", sizeof(s_guild_name) - 1); s_guild_name[sizeof(s_guild_name) - 1] = '\0';
+  wc_utf8_copy(s_guild_name, guild_name ? guild_name : "", sizeof(s_guild_name));
   s_collapsed[0] = '\0';
   if (persist_exists(PK_COLLAPSED_CATS)) persist_read_string(PK_COLLAPSED_CATS, s_collapsed, sizeof(s_collapsed));
   s_window = window_create();

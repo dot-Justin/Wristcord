@@ -82,10 +82,10 @@ static void on_rows_done(WcRow *rows, int count) {
     WcRow *w = &rows[i];
     if (w->n_fields < 6) continue;
     Msg *m = &s_msgs[s_count];
-    strncpy(m->author, w->fields[0], sizeof(m->author) - 1); m->author[sizeof(m->author) - 1] = '\0';
+    wc_utf8_copy(m->author, w->fields[0], sizeof(m->author));
     m->color = wc_hex_to_color(w->fields[1]);
     strncpy(m->time,   w->fields[2], sizeof(m->time)   - 1); m->time[sizeof(m->time) - 1] = '\0';
-    strncpy(m->text,   w->fields[3], sizeof(m->text)   - 1); m->text[sizeof(m->text) - 1] = '\0';
+    wc_utf8_copy(m->text, w->fields[3], sizeof(m->text));
     strncpy(m->id,     w->fields[4], sizeof(m->id)     - 1); m->id[sizeof(m->id) - 1] = '\0';
     m->truncated = (w->fields[5][0] == '1');
     s_count++;
@@ -227,8 +227,7 @@ void chat_view_window_push(WristcordSettings *settings, const char *channel_id, 
   s_settings = settings;
   strncpy(s_channel_id, channel_id ? channel_id : "", sizeof(s_channel_id) - 1);
   s_channel_id[sizeof(s_channel_id) - 1] = '\0';
-  strncpy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name) - 1);
-  s_channel_name[sizeof(s_channel_name) - 1] = '\0';
+  wc_utf8_copy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name));
 
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));

@@ -26,13 +26,15 @@ static void on_done(WcRow *rows, int count) {
     if (rows[i].n_fields < 1) continue;
     const char *chunk = rows[i].fields[0];
     size_t chunk_len = strlen(chunk);
-    if (pos + chunk_len >= MSG_VIEW_TEXT_BUF - 1) {
-      chunk_len = MSG_VIEW_TEXT_BUF - 1 - pos;
+    size_t remaining = MSG_VIEW_TEXT_BUF - pos;          // includes the NUL slot
+    if (chunk_len + 1 > remaining) {
+      // Won't fit — copy a UTF-8-safe prefix (no partial trailing code point) and stop.
+      wc_utf8_copy(s_full + pos, chunk, remaining);
+      break;
     }
     memcpy(s_full + pos, chunk, chunk_len);
     pos += chunk_len;
     s_full[pos] = '\0';
-    if (pos >= MSG_VIEW_TEXT_BUF - 1) break;
   }
 
   text_layer_set_text(s_text, s_full);

@@ -64,7 +64,22 @@ var lastFullById = {};
 
 function currentToken() { return loadSettings().token; }
 
-function chunkText(s, size) { var out = []; for (var i = 0; i < s.length; i += size) out.push([s.slice(i, i + size)]); return out.length ? out : [['']]; }
+function chunkText(s, size) {
+  var out = [];
+  var i = 0;
+  while (i < s.length) {
+    var end = Math.min(i + size, s.length);
+    // Don't split a surrogate pair across chunks — a lone surrogate encodes to
+    // invalid UTF-8, which hard-faults graphics_draw_text on real hardware.
+    if (end < s.length) {
+      var c = s.charCodeAt(end - 1);
+      if (c >= 0xD800 && c <= 0xDBFF) end--;   // high surrogate -> defer to next chunk
+    }
+    out.push([s.slice(i, end)]);
+    i = end;
+  }
+  return out.length ? out : [['']];
+}
 
 // returns { records: [...] } or { err: <code> }
 function buildRecords(op, id) {
