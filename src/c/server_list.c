@@ -111,24 +111,32 @@ static void on_rows_done(WcRow *rows, int count) {
   s_all_count = 0;
   for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
+    // Fine breadcrumb: 1000 + row*10 + subphase. Decode: row=(N-1000)/10, sub=(N-1000)%10.
+    // sub 0=enter 1=after id 2=after name 3=after color/parent 4=after members(done)
+    wc_dbg_stage(1000 + i * 10 + 0);
     if (w->n_fields < 5) continue;
     SRow *r = &s_all[s_all_count];
     r->kind = w->fields[0][0];
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
+    wc_dbg_stage(1000 + i * 10 + 1);
     wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
+    wc_dbg_stage(1000 + i * 10 + 2);
     r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
     r->parent = (par && par[0]) ? atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
+    wc_dbg_stage(1000 + i * 10 + 3);
     r->n_members = 0;
     if (w->n_fields >= 6 && w->fields[5][0]) {
       char tmp[80]; strncpy(tmp, w->fields[5], sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
       char *tok = strtok(tmp, ",");
       while (tok && r->n_members < 4) { r->members[r->n_members++] = wc_hex_to_color(tok); tok = strtok(NULL, ","); }
     }
+    wc_dbg_stage(1000 + i * 10 + 4);
     s_all_count++;
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
+  wc_dbg_stage(8000);             // 8000 = build loop finished, entering rebuild_visible
   rebuild_visible();
   wc_dbg_stage(8);                // 8 = models built, about to reload the menu (draw next)
   if (s_menu) menu_layer_reload_data(s_menu);
