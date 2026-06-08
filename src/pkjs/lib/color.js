@@ -1,10 +1,22 @@
 // src/pkjs/lib/color.js
-// Curated subset of the Pebble 64-color palette that reads well as a server dot
-// on the Midnight theme (avoids near-black / near-white that vanish on dark bg).
+// Vibrant subset of the Pebble 64-color palette for server dots. Picked to be
+// bright and saturated (no dark/dull entries) while keeping white initials legible,
+// and to read well on both the dark and light themes.
 var PALETTE = [
-  '0x5555FF', '0x00AAFF', '0x00AA55', '0x55AA00', '0xAAAA00',
-  '0xFF5500', '0xFF0055', '0xAA00FF', '0xFF55AA', '0x00AAAA',
-  '0xFFAA00', '0x55AAFF'
+  '0xFF0000', // red
+  '0xFF5500', // orange
+  '0xFFAA00', // amber
+  '0x00AA00', // green
+  '0x00AA55', // jade
+  '0x00AAAA', // teal
+  '0x00AAFF', // sky
+  '0x0055FF', // blue
+  '0x5555FF', // blurple
+  '0xAA00FF', // purple
+  '0xFF00AA', // pink
+  '0xFF0055', // rose
+  '0xFF55AA', // light pink
+  '0x55AAFF'  // light blue
 ];
 
 function nameToAccentHex(name) {
