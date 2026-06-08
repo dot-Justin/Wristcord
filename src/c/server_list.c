@@ -123,14 +123,18 @@ static void on_rows_done(WcRow *rows, int count) {
     wc_dbg_stage(1000 + i * 10 + 2);
     r->color = wc_hex_to_color(w->fields[3]);
     const char *par = w->fields[4];
-    r->parent = (par && par[0]) ? atoi(par) : -1;
+    r->parent = (par && par[0]) ? wc_atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
     wc_dbg_stage(1000 + i * 10 + 3);
     r->n_members = 0;
     if (w->n_fields >= 6 && w->fields[5][0]) {
-      char tmp[80]; strncpy(tmp, w->fields[5], sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
-      char *tok = strtok(tmp, ",");
-      while (tok && r->n_members < 4) { r->members[r->n_members++] = wc_hex_to_color(tok); tok = strtok(NULL, ","); }
+      // Parse the comma-joined hex list without strtok/strncpy (libc-free).
+      const char *p = w->fields[5];
+      while (*p && r->n_members < 4) {
+        r->members[r->n_members++] = wc_hex_to_color(p);   // stops at the comma
+        while (*p && *p != ',') p++;
+        if (*p == ',') p++; else break;
+      }
     }
     wc_dbg_stage(1000 + i * 10 + 4);
     s_all_count++;

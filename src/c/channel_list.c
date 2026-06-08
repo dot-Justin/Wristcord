@@ -47,7 +47,7 @@ static void on_rows_done(WcRow *rows, int count) {
     strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
     wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
     const char *par = w->fields[3];
-    r->parent = (par && par[0]) ? atoi(par) : -1;
+    r->parent = (par && par[0]) ? wc_atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
     r->last_message_id[0] = '\0';
     if (w->n_fields >= 5 && w->fields[4][0]) {

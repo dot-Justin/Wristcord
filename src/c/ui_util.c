@@ -52,10 +52,34 @@ void wc_dbg_stage(int n) { persist_write_int(PK_DBG_STAGE, n); }
 int wc_dbg_prev(void) { return s_dbg_prev; }
 
 // ---- rendering helpers ----
+// Hand-rolled hex parse — avoids the firmware-provided strtol(), which faults on
+// the new Core Devices PebbleOS (QEMU's strtol works, hence emulator-only success).
+// Parses an optional 0x prefix then hex digits, stopping at the first non-hex char
+// (so it also reads one CSV segment of memberColors without a separate split).
 GColor wc_hex_to_color(const char *s) {
   uint32_t v = 0;
-  if (s && s[0]) v = (uint32_t)strtol(s, NULL, 16);
+  if (s) {
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    for (; *s; s++) {
+      char c = *s; int d;
+      if (c >= '0' && c <= '9') d = c - '0';
+      else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+      else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+      else break;
+      v = (v << 4) | (uint32_t)d;
+    }
+  }
   return GColorFromHEX(v);
+}
+
+// Hand-rolled atoi — same rationale (avoid firmware libc on the parse path).
+int wc_atoi(const char *s) {
+  int v = 0; bool neg = false;
+  if (!s) return 0;
+  while (*s == ' ') s++;
+  if (*s == '-') { neg = true; s++; } else if (*s == '+') s++;
+  for (; *s >= '0' && *s <= '9'; s++) v = v * 10 + (*s - '0');
+  return neg ? -v : v;
 }
 // Bytes in the UTF-8 code point that starts with lead byte c (1 for a
 // continuation/invalid lead, so callers always make forward progress).

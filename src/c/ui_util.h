@@ -7,6 +7,7 @@ bool   wc_csv_contains(const char *csv, const char *id);
 void   wc_csv_add(char *csv, size_t cap, const char *id);
 void   wc_csv_remove(char *csv, const char *id);
 GColor wc_hex_to_color(const char *s);
+int    wc_atoi(const char *s);   // libc-free atoi (firmware atoi faults on new PebbleOS)
 
 // UTF-8-safe bounded copy: copies src into dst (capacity `cap` incl. NUL) and
 // NEVER leaves a partial trailing multibyte sequence. graphics_draw_text
