@@ -3,6 +3,7 @@
 #include "rows.h"
 #include "ui_util.h"
 #include "channel_list.h"
+#include "tutorial.h"
 
 #define OP_GUILDS 1
 #define PK_EXPANDED 200
@@ -31,6 +32,67 @@ static LoadState s_state;
 static int s_err_code;
 static char s_expanded[256];
 
+// ── Help/Settings action menu ─────────────────────────────────────────────────
+static ActionMenuLevel *s_am_level;
+
+// Tiny "Settings info" window shown from Help/Settings → Settings
+static Window    *s_info_window;
+static TextLayer *s_info_text;
+
+static void info_window_unload(Window *w) {
+  (void)w;
+  text_layer_destroy(s_info_text); s_info_text = NULL;
+  window_destroy(s_info_window);   s_info_window = NULL;
+}
+
+static void push_info_window(void) {
+  if (s_info_window) { window_stack_push(s_info_window, true); return; }
+  s_info_window = window_create();
+  window_set_background_color(s_info_window, wc_theme_bg(s_settings));
+  Layer *root = window_get_root_layer(s_info_window);
+  GRect b = layer_get_bounds(root);
+  s_info_text = text_layer_create(GRect(6, 8, b.size.w - 12, b.size.h - 16));
+  text_layer_set_background_color(s_info_text, GColorClear);
+  text_layer_set_text_color(s_info_text, wc_theme_fg(s_settings));
+  text_layer_set_font(s_info_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_overflow_mode(s_info_text, GTextOverflowModeWordWrap);
+  text_layer_set_text(s_info_text,
+    "Change your token, theme, accent, and refresh rate in the Wristcord settings in the Pebble phone app.");
+  layer_add_child(root, text_layer_get_layer(s_info_text));
+  window_set_window_handlers(s_info_window, (WindowHandlers){ .unload = info_window_unload });
+  window_stack_push(s_info_window, true);
+}
+
+static void am_help(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
+  (void)m; (void)item; (void)ctx;
+  tutorial_window_push(s_settings);
+}
+
+static void am_settings_info(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
+  (void)m; (void)item; (void)ctx;
+  push_info_window();
+}
+
+static void am_did_close(ActionMenu *m, const ActionMenuItem *performed, void *ctx) {
+  (void)m; (void)performed; (void)ctx;
+  if (s_am_level) { action_menu_hierarchy_destroy(s_am_level, NULL, NULL); s_am_level = NULL; }
+}
+
+static void open_help_menu(void) {
+  s_am_level = action_menu_level_create(2);
+  action_menu_level_add_action(s_am_level, "Help",     am_help,          NULL);
+  action_menu_level_add_action(s_am_level, "Settings", am_settings_info, NULL);
+  ActionMenuConfig config = (ActionMenuConfig){
+    .root_level = s_am_level,
+    .colors = {
+      .background = s_settings->accent,
+      .foreground = GColorWhite,
+    },
+    .align    = ActionMenuAlignCenter,
+    .did_close = am_did_close,
+  };
+  action_menu_open(&config);
+}
 
 static void rebuild_visible(void) {
   s_visible_count = 0;
@@ -151,7 +213,23 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   }
 }
 
+static void select_long_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
+  (void)m; (void)ci; (void)ctx;
+  open_help_menu();
+}
+
 static const char *s_titlebar_text = "Wristcord";
+static bool s_tut_checked;
+
+static void window_appear(Window *w) {
+  (void)w;
+  if (!s_tut_checked) {
+    s_tut_checked = true;
+    if (!persist_exists(PK_TUTORIAL_DONE)) {
+      tutorial_window_push(s_settings);
+    }
+  }
+}
 
 static void window_load(Window *w) {
   (void)w;
@@ -160,10 +238,11 @@ static void window_load(Window *w) {
 
   s_menu = menu_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
-    .get_num_rows = get_num_rows,
-    .get_cell_height = get_cell_height,
-    .draw_row = draw_row,
-    .select_click = select_click,
+    .get_num_rows      = get_num_rows,
+    .get_cell_height   = get_cell_height,
+    .draw_row          = draw_row,
+    .select_click      = select_click,
+    .select_long_click = select_long_click,
   });
   menu_layer_set_normal_colors(s_menu, wc_theme_bg(s_settings), wc_theme_fg(s_settings));
   menu_layer_set_highlight_colors(s_menu, s_settings->accent, GColorWhite);
@@ -182,11 +261,16 @@ static void window_unload(Window *w) {
 
 void server_list_window_push(WristcordSettings *settings) {
   s_settings = settings;
+  s_tut_checked = false;
   s_expanded[0] = '\0';
   if (persist_exists(PK_EXPANDED)) persist_read_string(PK_EXPANDED, s_expanded, sizeof(s_expanded));
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));
-  window_set_window_handlers(s_window, (WindowHandlers){ .load = window_load, .unload = window_unload });
+  window_set_window_handlers(s_window, (WindowHandlers){
+    .load   = window_load,
+    .appear = window_appear,
+    .unload = window_unload,
+  });
   window_stack_push(s_window, true);
 }
 
