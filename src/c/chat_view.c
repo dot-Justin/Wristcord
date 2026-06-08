@@ -4,6 +4,7 @@
 #include "ui_util.h"
 #include "compose.h"
 #include "msg_view.h"
+#include "readstate.h"
 
 #define OP_MESSAGES 3
 #define WC_MAX_MSGS 40    // we only fetch ~20 messages; small cap keeps Emery virtual_size (uint16) headroom
@@ -94,6 +95,7 @@ static void on_rows_done(WcRow *rows, int count) {
   if (s_count > 0) {
     menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = s_count - 1 },
                                   MenuRowAlignBottom, false);   // newest at bottom
+    wc_readstate_mark(s_channel_id, s_msgs[s_count - 1].id);   // mark channel read up to newest message
   }
 }
 

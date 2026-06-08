@@ -3,11 +3,12 @@
 #include "chat_view.h"
 #include "rows.h"
 #include "ui_util.h"
+#include "readstate.h"
 
 #define OP_CHANNELS 2
 #define PK_COLLAPSED_CATS 201
 
-typedef struct { char kind; char id[20]; char name[28]; int parent; } CRow;
+typedef struct { char kind; char id[20]; char name[28]; int parent; char last_message_id[20]; } CRow;
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR } LoadState;
 
 static Window *s_window;
@@ -48,6 +49,11 @@ static void on_rows_done(WcRow *rows, int count) {
     const char *par = w->fields[3];
     r->parent = (par && par[0]) ? atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
+    r->last_message_id[0] = '\0';
+    if (w->n_fields >= 5 && w->fields[4][0]) {
+      strncpy(r->last_message_id, w->fields[4], sizeof(r->last_message_id) - 1);
+      r->last_message_id[sizeof(r->last_message_id) - 1] = '\0';
+    }
     s_all_count++;
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
@@ -98,13 +104,29 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), expanded, fg);
   } else {
     int indent = (r->parent >= 0) ? 16 : 0;
+    bool unread = wc_readstate_is_unread(r->id, r->last_message_id);
+    // dot: drawn left of the '#', only when unread
+    if (unread && !selected) {
+      GColor dot_color = wc_theme_fg(s_settings);
+      graphics_context_set_fill_color(ctx, dot_color);
+      graphics_fill_circle(ctx, GPoint(b.origin.x + 4 + indent, b.origin.y + 18), 3);
+    } else if (unread && selected) {
+      graphics_context_set_fill_color(ctx, GColorWhite);
+      graphics_fill_circle(ctx, GPoint(b.origin.x + 4 + indent, b.origin.y + 18), 3);
+    }
+    // '#' glyph
     GColor hash = selected ? GColorWhite : GColorLightGray;
     graphics_context_set_text_color(ctx, hash);
     graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 6 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-    graphics_context_set_text_color(ctx, fg);
+      GRect(b.origin.x + 10 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    // name color: unread = bright fg; read = dimmed gray; selected always white
+    GColor name_color;
+    if (selected) name_color = GColorWhite;
+    else if (unread) name_color = wc_theme_fg(s_settings);
+    else name_color = GColorLightGray;
+    graphics_context_set_text_color(ctx, name_color);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 6 + indent + 16, b.origin.y + 6, b.size.w - indent - 28, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+      GRect(b.origin.x + 10 + indent + 16, b.origin.y + 6, b.size.w - indent - 32, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
 }
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
