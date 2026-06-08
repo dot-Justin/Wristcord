@@ -3,16 +3,17 @@
 #include "chat_view.h"
 #include "rows.h"
 #include "ui_util.h"
+#include "readstate.h"
 
 #define OP_CHANNELS 2
 #define PK_COLLAPSED_CATS 201
 
-typedef struct { char kind; char id[20]; char name[28]; int parent; } CRow;
+typedef struct { char kind; char id[20]; char name[28]; int parent; char last_message_id[20]; } CRow;
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR } LoadState;
 
 static Window *s_window;
 static MenuLayer *s_menu;
-static StatusBarLayer *s_status_bar;
+static TextLayer *s_titlebar;
 static WristcordSettings *s_settings;
 static char s_guild_id[20];
 static char s_guild_name[28];
@@ -48,6 +49,12 @@ static void on_rows_done(WcRow *rows, int count) {
     const char *par = w->fields[3];
     r->parent = (par && par[0]) ? atoi(par) : -1;
     if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
+    r->last_message_id[0] = '\0';
+    if (w->n_fields >= 5 && w->fields[4][0]) {
+      strncpy(r->last_message_id, w->fields[4], sizeof(r->last_message_id) - 1);
+      r->last_message_id[sizeof(r->last_message_id) - 1] = '\0';
+      if (r->kind == 't') wc_readstate_seed_if_absent(r->id, r->last_message_id);  // baseline on first sight
+    }
     s_all_count++;
   }
   s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
@@ -98,13 +105,29 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), expanded, fg);
   } else {
     int indent = (r->parent >= 0) ? 16 : 0;
-    GColor hash = selected ? GColorWhite : GColorLightGray;
+    bool unread = wc_readstate_is_unread(r->id, r->last_message_id);
+    // dot: drawn left of the '#', only when unread
+    if (unread && !selected) {
+      GColor dot_color = wc_theme_fg(s_settings);
+      graphics_context_set_fill_color(ctx, dot_color);
+      graphics_fill_circle(ctx, GPoint(b.origin.x + 5 + indent, b.origin.y + 18), 3);
+    } else if (unread && selected) {
+      graphics_context_set_fill_color(ctx, GColorWhite);
+      graphics_fill_circle(ctx, GPoint(b.origin.x + 5 + indent, b.origin.y + 18), 3);
+    }
+    // '#' glyph
+    GColor hash = selected ? GColorWhite : wc_theme_muted(s_settings);
     graphics_context_set_text_color(ctx, hash);
     graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 6 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-    graphics_context_set_text_color(ctx, fg);
+      GRect(b.origin.x + 14 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    // name color: unread = bright fg; read = dimmed muted; selected always white
+    GColor name_color;
+    if (selected) name_color = GColorWhite;
+    else if (unread) name_color = wc_theme_fg(s_settings);
+    else name_color = wc_theme_muted(s_settings);
+    graphics_context_set_text_color(ctx, name_color);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 6 + indent + 16, b.origin.y + 6, b.size.w - indent - 28, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+      GRect(b.origin.x + 14 + indent + 16, b.origin.y + 6, b.size.w - indent - 36, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
 }
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
@@ -125,9 +148,6 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
 static void window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar, GColorBlack, wc_theme_fg(s_settings));
-  status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeNone);
 
   s_menu = menu_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
@@ -140,7 +160,7 @@ static void window_load(Window *w) {
   menu_layer_set_highlight_colors(s_menu, s_settings->accent, GColorWhite);
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
-  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+  s_titlebar = wc_titlebar_create(root, b, s_guild_name, s_settings);
 
   start_fetch();
 }
@@ -148,7 +168,7 @@ static void window_unload(Window *w) {
   (void)w;
   wc_rows_cancel();                 // drop any in-flight fetch -> no stale callback into this window
   menu_layer_destroy(s_menu); s_menu = NULL;
-  status_bar_layer_destroy(s_status_bar);
+  text_layer_destroy(s_titlebar); s_titlebar = NULL;
   window_destroy(s_window); s_window = NULL;
 }
 

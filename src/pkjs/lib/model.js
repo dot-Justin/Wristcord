@@ -169,20 +169,20 @@ function buildChannelTree(channels) {
   // Uncategorized first
   for (var ui = 0; ui < uncategorized.length; ui++) {
     var u = uncategorized[ui];
-    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '' });
+    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '', lastMessageId: String(u.last_message_id || '') });
   }
 
   // Categories with their children
   for (var ci = 0; ci < categories.length; ci++) {
     var cat = categories[ci];
     var catIndex = rows.length;
-    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '' });
+    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '', lastMessageId: '' });
 
     var children = byParent[cat.id] || [];
     children.sort(function(a, b) { return a.position - b.position; });
     for (var ki = 0; ki < children.length; ki++) {
       var ch2 = children[ki];
-      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex });
+      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex, lastMessageId: String(ch2.last_message_id || '') });
     }
   }
 
@@ -217,6 +217,18 @@ function cleanText(content, msg) {
  * packMessages(messages) -> array, oldest first.
  * Each: {author, color, time, text}
  */
+// Attachments/embeds can't be rendered on the watch — surface a clear text tag instead.
+function attachmentTag(msg) {
+  var atts = (msg && msg.attachments) || [];
+  var embeds = (msg && msg.embeds) || [];
+  var hasImage = atts.some(function (a) {
+    return (a.content_type && a.content_type.indexOf('image/') === 0) || (a.width && a.height);
+  }) || embeds.some(function (e) { return e.type === 'image' || e.image || e.thumbnail; });
+  if (hasImage) return '[image]';
+  if (atts.length) return '[attachment]';
+  return '';
+}
+
 function packMessages(messages) {
   // Discord returns newest-first; reverse to oldest-first
   var ordered = messages.slice().reverse();
@@ -232,18 +244,26 @@ function packMessages(messages) {
     var mm = m < 10 ? '0' + m : String(m);
     var time = h + ':' + mm;
 
-    // Clean and truncate content
+    // Clean content, prepend an attachment tag the watch can render (it can't show images).
     var cleaned = cleanText(msg.content, msg);
-    var text;
-    if (!cleaned) {
+    var tag = attachmentTag(msg);
+    var body = tag ? (cleaned ? tag + ' ' + cleaned : tag) : cleaned;
+    var full, text, truncated;
+    if (!body) {
+      full = '[no text]';
       text = '[no text]';
-    } else if (cleaned.length > 120) {
-      text = cleaned.slice(0, 120) + '…';  // '…'
+      truncated = false;
+    } else if (body.length > 120) {
+      full = body;
+      text = body.slice(0, 120) + '…';  // '…'
+      truncated = true;
     } else {
-      text = cleaned;
+      full = body;
+      text = body;
+      truncated = false;
     }
 
-    return { author: author, color: msgColor, time: time, text: text };
+    return { author: author, color: msgColor, time: time, text: text, id: String(msg.id), full: full, truncated: truncated };
   });
 }
 

@@ -19,3 +19,6 @@ package-lock.json
 
 # Brainstorm scratch (visual companion)
 .superpowers/
+
+# Dev validation screenshots (not shipped)
+screenshots/

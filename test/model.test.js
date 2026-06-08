@@ -342,3 +342,86 @@ test('packMessages: cleans Discord markup in text field', () => {
   ];
   assert.equal(packMessages(msg)[0].text, 'hey @al');
 });
+
+// ---------------------------------------------------------------------------
+// packMessages: M6 additions — id, full, truncated
+// ---------------------------------------------------------------------------
+
+test('packMessages: 200-char content yields truncated:true, full untruncated, text ends with ellipsis', () => {
+  const longContent = 'X'.repeat(200);
+  const msg = [
+    { id: 'msg-abc', author: { global_name: 'A', username: 'a' }, content: longContent, timestamp: '2024-01-01T00:00:00.000Z' },
+  ];
+  const result = packMessages(msg)[0];
+  assert.equal(result.id, 'msg-abc');
+  assert.equal(result.truncated, true);
+  assert.ok(result.full.length >= 200, 'full should be untruncated (~200 chars)');
+  assert.ok(result.text.endsWith('…'), 'text should end with ellipsis');
+  assert.ok(result.text.length <= 121, 'text should be at most 121 chars (120 + ellipsis)');
+});
+
+test('packMessages: short message yields truncated:false and full===text', () => {
+  const msg = [
+    { id: 'msg-xyz', author: { global_name: 'B', username: 'b' }, content: 'Hello world', timestamp: '2024-01-01T00:00:00.000Z' },
+  ];
+  const result = packMessages(msg)[0];
+  assert.equal(result.id, 'msg-xyz');
+  assert.equal(result.truncated, false);
+  assert.equal(result.full, result.text);
+  assert.equal(result.full, 'Hello world');
+});
+
+test('packMessages: id is returned as string', () => {
+  const msg = [
+    { id: 123456, author: { global_name: 'C', username: 'c' }, content: 'hi', timestamp: '2024-01-01T00:00:00.000Z' },
+  ];
+  assert.equal(typeof packMessages(msg)[0].id, 'string');
+  assert.equal(packMessages(msg)[0].id, '123456');
+});
+
+// ---------------------------------------------------------------------------
+// buildChannelTree: M6 additions — lastMessageId
+// ---------------------------------------------------------------------------
+
+test('buildChannelTree: text channel with last_message_id yields lastMessageId as string', () => {
+  const channels = [
+    { id: 'ch1', name: 'general', type: 0, position: 1, parent_id: null, last_message_id: '999' },
+  ];
+  const rows = buildChannelTree(channels);
+  assert.equal(rows[0].lastMessageId, '999');
+});
+
+test('buildChannelTree: text channel with null last_message_id yields empty string', () => {
+  const channels = [
+    { id: 'ch2', name: 'announcements', type: 5, position: 1, parent_id: null, last_message_id: null },
+  ];
+  const rows = buildChannelTree(channels);
+  assert.equal(rows[0].lastMessageId, '');
+});
+
+test('buildChannelTree: category row has empty lastMessageId', () => {
+  const channels = [
+    { id: 'cat1', name: 'General', type: 4, position: 0, parent_id: null },
+    { id: 'ch1', name: 'chat', type: 0, position: 1, parent_id: 'cat1', last_message_id: '777' },
+  ];
+  const rows = buildChannelTree(channels);
+  const catRow = rows.find(r => r.kind === 'c');
+  assert.equal(catRow.lastMessageId, '');
+  const textRow = rows.find(r => r.kind === 't');
+  assert.equal(textRow.lastMessageId, '777');
+});
+
+test('packMessages: image attachment shows [image] tag', () => {
+  const out = packMessages([{ id: '1', content: 'look', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [], attachments: [{ content_type: 'image/png', width: 10, height: 10 }] }]);
+  assert.equal(out[0].text, '[image] look');
+});
+
+test('packMessages: attachment with no caption -> just the tag', () => {
+  const out = packMessages([{ id: '2', content: '', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [], attachments: [{ filename: 'x.zip' }] }]);
+  assert.equal(out[0].text, '[attachment]');
+});
+
+test('packMessages: no attachment, no content -> [no text]', () => {
+  const out = packMessages([{ id: '3', content: '', author: { username: 'a' }, timestamp: '2020-01-01T09:04:00Z', mentions: [] }]);
+  assert.equal(out[0].text, '[no text]');
+});
