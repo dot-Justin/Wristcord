@@ -107,6 +107,14 @@ static void rebuild_visible(void) {
 
 // ---- rows callbacks ----
 static void on_rows_done(WcRow *rows, int count) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "rows_done: count=%d", count);
+  if (count > 0) {
+    WcRow *w0 = &rows[0];
+    APP_LOG(APP_LOG_LEVEL_INFO, "row0: nf=%d color=[%s] name=[%s]",
+            w0->n_fields,
+            w0->n_fields > 3 ? w0->fields[3] : "?",
+            w0->n_fields > 2 ? w0->fields[2] : "?");
+  }
   s_all_count = 0;
   for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
@@ -132,6 +140,7 @@ static void on_rows_done(WcRow *rows, int count) {
   if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void on_rows_err(int code) {
+  APP_LOG(APP_LOG_LEVEL_WARNING, "rows_err: code=%d", code);
   s_err_code = code; s_state = ST_ERROR;
   if (s_menu) menu_layer_reload_data(s_menu);
 }
