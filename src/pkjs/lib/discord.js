@@ -14,6 +14,12 @@ function makeClient(request) {
     },
     sendMessage: function (channelId, content) {
       return request('POST', '/channels/' + channelId + '/messages', { content: content });
+    },
+    ack: function (channelId, messageId) {
+      // Discord disabled this for bot tokens but it still works for user (selfbot) tokens.
+      // body {manual:true} matches the official client's request shape.
+      return request('POST', '/channels/' + channelId + '/messages/' + messageId + '/ack',
+        { manual: true });
     }
   };
 }
