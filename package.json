@@ -8,6 +8,8 @@
   "scripts": { "test": "node --test 'test/**/*.test.js'" },
   "pebble": {
     "displayName": "Wristcord",
+    "description": "Discord on your wrist! Browse your servers, follow chats, and send a reply with your voice, right from Pebble Time 2. Heads up, Wristcord is a selfbot; by using it you accept that selfbotting is against Discord ToS.",
+    "category": "Communication",
     "uuid": "da8247b9-80ed-4af8-968f-33b79d2a0483",
     "sdkVersion": "3",
     "enableMultiJS": true,

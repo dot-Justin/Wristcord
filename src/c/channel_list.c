@@ -105,27 +105,16 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), expanded, fg);
   } else {
     int indent = (r->parent >= 0) ? 16 : 0;
-    bool unread = wc_readstate_is_unread(r->id, r->last_message_id);
-    // dot: drawn left of the '#', only when unread
-    if (unread && !selected) {
-      GColor dot_color = wc_theme_fg(s_settings);
-      graphics_context_set_fill_color(ctx, dot_color);
-      graphics_fill_circle(ctx, GPoint(b.origin.x + 5 + indent, b.origin.y + 18), 3);
-    } else if (unread && selected) {
-      graphics_context_set_fill_color(ctx, GColorWhite);
-      graphics_fill_circle(ctx, GPoint(b.origin.x + 5 + indent, b.origin.y + 18), 3);
-    }
-    // '#' glyph
+    // v1: unread indicators are intentionally hidden because pure-REST tracking
+    // can't agree with Discord's canonical read state (reads on phone/desktop
+    // can't be detected without a gateway connection). v1.1 will re-enable this
+    // backed by a Discord gateway WebSocket in pkjs; the wc_readstate_* helpers
+    // still maintain local state so we can replace the source with one line.
     GColor hash = selected ? GColorWhite : wc_theme_muted(s_settings);
     graphics_context_set_text_color(ctx, hash);
     graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(b.origin.x + 14 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-    // name color: unread = bright fg; read = dimmed muted; selected always white
-    GColor name_color;
-    if (selected) name_color = GColorWhite;
-    else if (unread) name_color = wc_theme_fg(s_settings);
-    else name_color = wc_theme_muted(s_settings);
-    graphics_context_set_text_color(ctx, name_color);
+    graphics_context_set_text_color(ctx, fg);
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(b.origin.x + 14 + indent + 16, b.origin.y + 6, b.size.w - indent - 36, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
