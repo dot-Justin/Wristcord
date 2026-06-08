@@ -10,7 +10,7 @@
 static Window         *s_window;
 static ScrollLayer    *s_scroll;
 static TextLayer      *s_text;
-static StatusBarLayer *s_status_bar;
+static TextLayer      *s_titlebar;
 static WristcordSettings *s_settings;
 static char            s_msg_id[20];
 static char            s_full[MSG_VIEW_TEXT_BUF];
@@ -63,18 +63,15 @@ static void on_err(int code) {
   text_layer_set_text(s_text, msg);
 }
 
+static const char *s_titlebar_text = "Message";
+
 // ── window lifecycle ──────────────────────────────────────────────────────────
 
 static void window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
 
-  // status bar
-  s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar, s_settings->accent, GColorWhite);
-  status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeNone);
-
-  // scroll area below status bar
+  // scroll area below title bar
   GRect scroll_frame = GRect(0, STATUS_BAR_LAYER_HEIGHT,
                              b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT);
   s_scroll = scroll_layer_create(scroll_frame);
@@ -96,7 +93,7 @@ static void window_load(Window *w) {
   scroll_layer_set_click_config_onto_window(s_scroll, w);
 
   layer_add_child(root, scroll_layer_get_layer(s_scroll));
-  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+  s_titlebar = wc_titlebar_create(root, b, s_titlebar_text, s_settings);
 
   // fetch full message text
   wc_rows_fetch(OP_MSG_FULL, s_msg_id, on_done, on_err);
@@ -107,7 +104,7 @@ static void window_unload(Window *w) {
   wc_rows_cancel();
   text_layer_destroy(s_text);  s_text = NULL;
   scroll_layer_destroy(s_scroll); s_scroll = NULL;
-  status_bar_layer_destroy(s_status_bar);
+  text_layer_destroy(s_titlebar); s_titlebar = NULL;
   window_destroy(s_window); s_window = NULL;
 }
 

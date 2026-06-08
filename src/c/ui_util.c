@@ -1,5 +1,6 @@
 // src/c/ui_util.c
 #include "ui_util.h"
+#include "settings.h"
 
 // ---- CSV collapse-set helpers ----
 bool wc_csv_contains(const char *csv, const char *id) {
@@ -68,6 +69,18 @@ void wc_draw_dot(GContext *ctx, GPoint center, int radius, GColor color, const c
   graphics_draw_text(ctx, initials, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
     GRect(center.x - radius, center.y - 9, radius * 2, 18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
+TextLayer *wc_titlebar_create(Layer *root, GRect bounds, const char *title, WristcordSettings *s) {
+  TextLayer *t = text_layer_create(GRect(0, 0, bounds.size.w, STATUS_BAR_LAYER_HEIGHT));
+  text_layer_set_background_color(t, GColorBlack);
+  text_layer_set_text_color(t, s->accent);
+  text_layer_set_font(t, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
+  text_layer_set_text_alignment(t, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(t, GTextOverflowModeTrailingEllipsis);
+  text_layer_set_text(t, title);
+  layer_add_child(root, text_layer_get_layer(t));
+  return t;
+}
+
 void wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
   // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
   int cx = box.origin.x + box.size.w / 2;

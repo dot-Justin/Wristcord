@@ -22,7 +22,7 @@ typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR } LoadState;
 
 static Window         *s_window;
 static MenuLayer      *s_menu;
-static StatusBarLayer *s_status_bar;
+static TextLayer      *s_titlebar;
 static WristcordSettings *s_settings;
 static char            s_channel_id[20];
 static char            s_channel_name[28];
@@ -179,14 +179,12 @@ static void select_long_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
 
 // ── window lifecycle ──────────────────────────────────────────────────────────
 
+static char s_title[30];
+
 static void window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
   s_width = b.size.w;
-
-  s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar, GColorBlack, wc_theme_fg(s_settings));
-  status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeNone);
 
   s_menu = menu_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
@@ -203,7 +201,8 @@ static void window_load(Window *w) {
 
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
-  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+  snprintf(s_title, sizeof(s_title), "#%s", s_channel_name);
+  s_titlebar = wc_titlebar_create(root, b, s_title, s_settings);
 
   start_fetch();
 }
@@ -212,7 +211,7 @@ static void window_unload(Window *w) {
   (void)w;
   wc_rows_cancel();   // drop any in-flight fetch -> no stale callback into this window
   menu_layer_destroy(s_menu); s_menu = NULL;
-  status_bar_layer_destroy(s_status_bar);
+  text_layer_destroy(s_titlebar); s_titlebar = NULL;
   window_destroy(s_window); s_window = NULL;
 }
 
