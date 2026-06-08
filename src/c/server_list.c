@@ -170,7 +170,7 @@ static void draw_grid(GContext *ctx, GRect box, SRow *r) {
   int d = 22, gap = 2, cell = (d - gap) / 2;
   int x0 = box.origin.x, y0 = box.origin.y + (box.size.h - d) / 2;
   for (int i = 0; i < 4; i++) {
-    GColor col = (i < r->n_members) ? r->members[i] : GColorDarkGray;
+    GColor col = (i < r->n_members) ? r->members[i] : GColorLightGray;
     int cx = x0 + (i % 2) * (cell + gap) + cell / 2;
     int cy = y0 + (i / 2) * (cell + gap) + cell / 2;
     graphics_context_set_fill_color(ctx, col);
