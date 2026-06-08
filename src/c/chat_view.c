@@ -6,6 +6,7 @@
 #include "msg_view.h"
 
 #define OP_MESSAGES 3
+#define WC_MAX_MSGS 125   // keep below WC_MAX_ROWS to stay within Emery virtual_size uint16 budget
 
 typedef struct {
   char  author[24];
@@ -24,7 +25,7 @@ static StatusBarLayer *s_status_bar;
 static WristcordSettings *s_settings;
 static char            s_channel_id[20];
 static char            s_channel_name[28];
-static Msg             s_msgs[WC_MAX_ROWS];
+static Msg             s_msgs[WC_MAX_MSGS];
 static int             s_count;
 static int             s_width = 200;   // updated on window_load from bounds
 static LoadState       s_state;
@@ -76,7 +77,7 @@ static void open_action_menu(void) {
 static void on_rows_done(WcRow *rows, int count) {
   if (!s_menu) return;
   s_count = 0;
-  for (int i = 0; i < count && s_count < WC_MAX_ROWS; i++) {
+  for (int i = 0; i < count && s_count < WC_MAX_MSGS; i++) {
     WcRow *w = &rows[i];
     if (w->n_fields < 6) continue;
     Msg *m = &s_msgs[s_count];
@@ -211,6 +212,12 @@ static void window_unload(Window *w) {
   menu_layer_destroy(s_menu); s_menu = NULL;
   status_bar_layer_destroy(s_status_bar);
   window_destroy(s_window); s_window = NULL;
+}
+
+// ── public interface ──────────────────────────────────────────────────────────
+
+void chat_view_refresh(void) {
+  if (s_menu) start_fetch();
 }
 
 // ── public entry point ────────────────────────────────────────────────────────
