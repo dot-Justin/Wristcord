@@ -21,6 +21,6 @@ package-lock.json
 .superpowers/
 
 # Dev validation screenshots (not shipped) — but keep the curated marketing set.
-screenshots/
+screenshots/*
 !screenshots/store/
 !screenshots/store/**
