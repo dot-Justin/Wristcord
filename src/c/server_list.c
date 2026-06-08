@@ -221,13 +221,18 @@ static void select_long_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
 static const char *s_titlebar_text = "Wristcord";
 static bool s_tut_checked;
 
+static void tut_timer_cb(void *data) {
+  (void)data;
+  if (!persist_exists(PK_TUTORIAL_DONE)) tutorial_window_push(s_settings);
+}
+
 static void window_appear(Window *w) {
   (void)w;
   if (!s_tut_checked) {
     s_tut_checked = true;
-    if (!persist_exists(PK_TUTORIAL_DONE)) {
-      tutorial_window_push(s_settings);
-    }
+    // Defer the push: pushing a window *during* this appear transition leaves the
+    // new window's click handlers uninstalled (onboarding then can't be advanced).
+    if (!persist_exists(PK_TUTORIAL_DONE)) app_timer_register(350, tut_timer_cb, NULL);
   }
 }
 
