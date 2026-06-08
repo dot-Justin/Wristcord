@@ -190,6 +190,13 @@ function buildChannelTree(channels, readStateLookup) {
       if (rs) {
         unread = (lastMsg && snowflakeGt(lastMsg, rs.lastReadId || '0')) ? '1' : '0';
         mentionCount = String(rs.mentionCount | 0);
+      } else {
+        // Gateway is live but Discord has no read_state entry for this channel —
+        // that means Discord considers it read (user has never had unread
+        // activity there). Emit '0' explicitly so the C side trusts Discord
+        // instead of falling back to the local "have I shown this" heuristic.
+        unread = '0';
+        mentionCount = '0';
       }
     }
     return {

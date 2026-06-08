@@ -84,13 +84,21 @@ static void on_rows_done(WcRow *rows, int count) {
   rebuild_visible();
   menu_layer_reload_data(s_menu);
 }
-static void on_rows_err(int code) { if (!s_menu) return; s_err_code = code; s_state = ST_ERROR; menu_layer_reload_data(s_menu); }
+static void on_rows_err(int code) {
+  if (!s_menu) return;
+  // Keep showing the existing channels if a silent refetch fails — only flip to
+  // the error screen when we had nothing to show in the first place.
+  if (s_state != ST_READY) { s_err_code = code; s_state = ST_ERROR; menu_layer_reload_data(s_menu); }
+}
 
-static void start_fetch(void) {
-  s_state = ST_LOADING;
-  if (s_menu) menu_layer_reload_data(s_menu);
+static void do_fetch(bool show_loading) {
+  if (show_loading) {
+    s_state = ST_LOADING;
+    if (s_menu) menu_layer_reload_data(s_menu);
+  }
   wc_rows_fetch(OP_CHANNELS, s_guild_id, on_rows_done, on_rows_err);
 }
+static void start_fetch(void) { do_fetch(true); }
 
 static uint16_t get_num_rows(MenuLayer *m, uint16_t section, void *ctx) {
   (void)m; (void)section; (void)ctx;
@@ -128,9 +136,8 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), expanded, fg);
   } else {
     int indent = (r->parent >= 0) ? 16 : 0;
-    // v1.1: unread / mention state comes from the gateway-supplied flags. When
-    // gateway hasn't sent READY yet, fall back to the local readstate heuristic
-    // so newly-arrived messages between launch and READY still show as unread.
+    // Read state: gateway-supplied flag when we have one, otherwise fall back
+    // to the local persist heuristic for the brief pre-READY window after launch.
     bool unread; int mention_count;
     if (r->gateway_known) {
       unread = r->unread;
@@ -139,19 +146,43 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
       unread = wc_readstate_is_unread(r->id, r->last_message_id);
       mention_count = 0;
     }
-    int badge_w = 22;                                  // right column reserved for dot/badge
-    GColor hash = selected ? GColorWhite : wc_theme_muted(s_settings);
-    graphics_context_set_text_color(ctx, hash);
-    graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 14 + indent, b.origin.y + 7, 14, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-    graphics_context_set_text_color(ctx, fg);
+
+    // Layout: the v1 gutter on the LEFT carries the indicator. Mention badge
+    // replaces the '#' so the bigger circle has room; the channel name shifts
+    // right with it. Unread-without-mention keeps v1's small dot in the gutter
+    // and leaves the '#' / name position untouched (no jitter on read/unread).
+    int x = b.origin.x + indent;
+    int hash_x = x + 14;
+    int name_x = hash_x + 16;
+    bool draw_hash = true;
+    if (mention_count > 0) {
+      wc_draw_mention_badge(ctx, GRect(x + 4, b.origin.y + 9, 18, 18), mention_count);
+      hash_x = x + 4 + 18;            // shift # off-screen behind the badge
+      name_x = hash_x + 4;            // and pull the name in close to the badge
+      draw_hash = false;
+    } else if (unread) {
+      wc_draw_unread_dot(ctx, GPoint(x + 5, b.origin.y + 18), selected, s_settings);
+    }
+
+    if (draw_hash) {
+      GColor hash = selected ? GColorWhite : wc_theme_muted(s_settings);
+      graphics_context_set_text_color(ctx, hash);
+      graphics_draw_text(ctx, "#", fonts_get_system_font(FONT_KEY_GOTHIC_18),
+        GRect(hash_x, b.origin.y + 7, 14, 22),
+        GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    }
+
+    // v1 dim-name-when-read: read channels render in the muted theme color so
+    // unread ones visibly pop. Selected rows are always white for legibility.
+    GColor name_color;
+    if (selected) name_color = GColorWhite;
+    else if (unread || mention_count > 0) name_color = wc_theme_fg(s_settings);
+    else name_color = wc_theme_muted(s_settings);
+    graphics_context_set_text_color(ctx, name_color);
+    int name_w = b.size.w - (name_x - b.origin.x) - 6;
     graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 14 + indent + 16, b.origin.y + 6,
-            b.size.w - indent - 36 - badge_w, 24),
+      GRect(name_x, b.origin.y + 6, name_w, 24),
       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    wc_draw_unread_indicator(ctx,
-      GRect(b.size.w - badge_w - 4, b.origin.y, badge_w, b.size.h),
-      unread, mention_count, selected, s_settings);
   }
 }
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
@@ -167,6 +198,20 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   } else {
     chat_view_window_push(s_settings, r->id, r->name);
   }
+}
+
+// When the user returns from chat_view (or settings), silently refetch so any
+// new gateway state — including the optimistic markRead from our own OP_ACK —
+// is reflected in the row dots without flashing a Loading screen.
+static bool s_was_hidden;
+static void window_appear(Window *w) {
+  (void)w;
+  if (s_was_hidden && s_state == ST_READY) do_fetch(false);
+  s_was_hidden = false;
+}
+static void window_disappear(Window *w) {
+  (void)w;
+  s_was_hidden = true;
 }
 
 static void window_load(Window *w) {
@@ -202,8 +247,14 @@ void channel_list_window_push(WristcordSettings *settings, const char *guild_id,
   wc_utf8_copy(s_guild_name, guild_name ? guild_name : "", sizeof(s_guild_name));
   s_collapsed[0] = '\0';
   if (persist_exists(PK_COLLAPSED_CATS)) persist_read_string(PK_COLLAPSED_CATS, s_collapsed, sizeof(s_collapsed));
+  s_was_hidden = false;
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));
-  window_set_window_handlers(s_window, (WindowHandlers){ .load = window_load, .unload = window_unload });
+  window_set_window_handlers(s_window, (WindowHandlers){
+    .load = window_load,
+    .appear = window_appear,
+    .disappear = window_disappear,
+    .unload = window_unload,
+  });
   window_stack_push(s_window, true);
 }

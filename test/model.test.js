@@ -203,13 +203,16 @@ test('buildChannelTree: text rows include empty unread/mentionCount when no look
   assert.equal(rows[0].mentionCount, '');
 });
 
-test('buildChannelTree: lookup-returns-null leaves unread/mentionCount empty (fallback path)', () => {
+test('buildChannelTree: lookup-returns-null marks channel read (Discord truth, not local fallback)', () => {
   const rows = buildChannelTree(
     [{ id: 't1', name: 'general', type: 0, position: 0, parent_id: null, last_message_id: '999' }],
     () => null
   );
-  assert.equal(rows[0].unread, '');
-  assert.equal(rows[0].mentionCount, '');
+  // When the gateway is live and Discord has no read_state entry, the channel
+  // is treated as read — NOT fallen back to the local-persist heuristic. That
+  // would let the local "have I shown this" state masquerade as Discord truth.
+  assert.equal(rows[0].unread, '0');
+  assert.equal(rows[0].mentionCount, '0');
 });
 
 test('buildChannelTree: lookup with newer last_message_id sets unread=1', () => {

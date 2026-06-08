@@ -19,15 +19,13 @@ void   wc_make_initials(const char *name, char *out, size_t cap);   // out shoul
 void   wc_draw_dot(GContext *ctx, GPoint center, int radius, GColor color, const char *initials);
 void   wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color);
 
-// Channel-row unread indicator. Renders into `box` (right column):
-//   - mention_count > 0: red filled circle + white centered number ("3", "12", "99+")
-//   - else if unread:    small white filled dot
-//   - else:              nothing
-// `selected` flips the dot to the highlight foreground so it stays visible on
-// the accent-highlighted row.
-void   wc_draw_unread_indicator(GContext *ctx, GRect box, bool unread,
-                                int mention_count, bool selected,
-                                WristcordSettings *settings);
+// Draw a small white filled-circle "unread" dot at `center`. Matches v1.
+void   wc_draw_unread_dot(GContext *ctx, GPoint center, bool selected,
+                          WristcordSettings *settings);
+
+// Draw a red filled circle with a white centered number, fitted to `box`.
+// Counts > 99 clamp to "99" (no "+" — the circle isn't wide enough for 3 chars).
+void   wc_draw_mention_badge(GContext *ctx, GRect box, int mention_count);
 
 // Create a 20px themed title bar (surface bg + bold title) at the top of `root`.
 // Returns the TextLayer; caller destroys it on unload. `title` must remain valid
