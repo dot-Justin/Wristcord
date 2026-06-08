@@ -1,5 +1,6 @@
 // src/c/channel_list.c
 #include "channel_list.h"
+#include "chat_view.h"
 #include "rows.h"
 #include "ui_util.h"
 
@@ -116,8 +117,7 @@ static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
     rebuild_visible();
     menu_layer_reload_data(m);
   } else {
-    APP_LOG(APP_LOG_LEVEL_INFO, "open channel #%s (%s) -> chat in M5", r->name, r->id);
-    // M5: push chat for r->id / r->name
+    chat_view_window_push(s_settings, r->id, r->name);
   }
 }
 
