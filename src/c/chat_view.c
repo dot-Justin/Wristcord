@@ -6,9 +6,10 @@
 #include "msg_view.h"
 #include "readstate.h"
 
-#define OP_MESSAGES 3
-#define OP_ACK      6
-#define WC_MAX_MSGS 40    // we only fetch ~20 messages; small cap keeps Emery virtual_size (uint16) headroom
+#define OP_MESSAGES        3
+#define OP_ACK             6
+#define OP_MESSAGES_BEFORE 9
+#define WC_MAX_MSGS 60    // sliding window: 20 initial + up to ~40 older loaded via scroll-up
 
 typedef struct {
   char  author[24];
@@ -28,7 +29,9 @@ static TextLayer      *s_titlebar;
 static WristcordSettings *s_settings;
 static char            s_channel_id[20];
 static char            s_channel_name[28];
-static Msg             s_msgs[WC_MAX_MSGS];
+// Heap-allocated to keep this off the loaded-image BSS (64KB image-size cap;
+// see HANDOFF gotcha #3). Allocated in window_load, freed in window_unload.
+static Msg            *s_msgs;
 static int             s_count;
 static int             s_width = 200;   // updated on window_load from bounds
 static LoadState       s_state;
@@ -36,6 +39,11 @@ static int             s_err_code;
 static bool            s_fetching;   // guards against overlapping fetches (initial vs poll)
 static AppTimer       *s_poll;       // ambient refresh timer
 static char            s_acked_id[20];  // last message id we've ACK'd this session
+// Load-older paging state. Set when chat_view kicks off OP_MESSAGES_BEFORE so
+// on_rows_done can tell "prepend" from "wholesale replace". s_at_oldest goes
+// true when a load-older fetch returns zero rows.
+static bool            s_loading_older;
+static bool            s_at_oldest;
 
 // ── ActionMenu state ──────────────────────────────────────────────────────────
 
@@ -80,9 +88,73 @@ static void open_action_menu(void) {
 
 // ── rows callbacks ────────────────────────────────────────────────────────────
 
+// Parse one WcRow into a Msg slot. Returns true if the row was a valid message.
+static bool parse_message_row(WcRow *w, Msg *m) {
+  if (w->n_fields < 6) return false;
+  wc_utf8_copy(m->author, w->fields[0], sizeof(m->author));
+  m->color = wc_hex_to_color(w->fields[1]);
+  strncpy(m->time, w->fields[2], sizeof(m->time) - 1); m->time[sizeof(m->time) - 1] = '\0';
+  wc_utf8_copy(m->text, w->fields[3], sizeof(m->text));
+  strncpy(m->id, w->fields[4], sizeof(m->id) - 1); m->id[sizeof(m->id) - 1] = '\0';
+  m->truncated = (w->fields[5][0] == '1');
+  m->mentions_me = (w->n_fields >= 7) && (w->fields[6][0] == '1');
+  return true;
+}
+
 static void on_rows_done(WcRow *rows, int count) {
   s_fetching = false;
   if (!s_menu) return;
+
+  // ─── Load-older (OP_MESSAGES_BEFORE) path ────────────────────────────────
+  // Prepend the returned messages to s_msgs and keep the cursor visually on
+  // the same message the user was reading. If the response is empty, we've
+  // hit the start of history and won't ask again this session.
+  if (s_loading_older) {
+    s_loading_older = false;
+    if (count <= 0 || !s_msgs) { s_at_oldest = true; return; }
+    // Cap how many we ingest now so we know how much room they need at the top.
+    int n_in_max = WC_MAX_MSGS;
+    if (n_in_max > count) n_in_max = count;
+    // Drop newest from the tail if combining would exceed the cap. The user is
+    // reading history right now; the bottom of the buffer is the least useful.
+    int keep_existing = s_count;
+    if (n_in_max + keep_existing > WC_MAX_MSGS) keep_existing = WC_MAX_MSGS - n_in_max;
+    if (keep_existing < 0) keep_existing = 0;
+    // Shift existing forward into [n_in_max, n_in_max+keep_existing) BEFORE
+    // we write the new messages — otherwise we'd clobber them.
+    if (keep_existing > 0) {
+      memmove(&s_msgs[n_in_max], &s_msgs[0], sizeof(Msg) * keep_existing);
+    }
+    // Parse incoming straight into [0, n_in_max).
+    int n_in = 0;
+    for (int i = 0; i < count && n_in < n_in_max; i++) {
+      if (parse_message_row(&rows[i], &s_msgs[n_in])) n_in++;
+    }
+    if (n_in == 0) {
+      // Shift everything back — nothing parsed.
+      if (keep_existing > 0) memmove(&s_msgs[0], &s_msgs[n_in_max], sizeof(Msg) * keep_existing);
+      s_at_oldest = true;
+      return;
+    }
+    // If we parsed fewer than reserved, compact.
+    if (n_in < n_in_max && keep_existing > 0) {
+      memmove(&s_msgs[n_in], &s_msgs[n_in_max], sizeof(Msg) * keep_existing);
+    }
+    s_count = n_in + keep_existing;
+
+    MenuIndex prev_sel = menu_layer_get_selected_index(s_menu);
+    menu_layer_reload_data(s_menu);
+    // Keep cursor on the same message the user was looking at (it just moved
+    // down by n_in rows).
+    int new_row = prev_sel.row + n_in;
+    if (new_row >= s_count) new_row = s_count - 1;
+    menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = new_row },
+                                  MenuRowAlignCenter, false);
+    s_state = ST_READY;
+    return;
+  }
+
+  // ─── Initial / poll path (wholesale replace) ────────────────────────────
   // Was this an explicit (Loading) fetch, and was the user already at the newest msg?
   // We only auto-scroll / disturb the view when appropriate, so ambient polls don't
   // yank a user who has scrolled up to read history.
@@ -98,19 +170,12 @@ static void on_rows_done(WcRow *rows, int count) {
 
   s_count = 0;
   for (int i = 0; i < count && s_count < WC_MAX_MSGS; i++) {
-    WcRow *w = &rows[i];
-    if (w->n_fields < 6) continue;
-    Msg *m = &s_msgs[s_count];
-    wc_utf8_copy(m->author, w->fields[0], sizeof(m->author));
-    m->color = wc_hex_to_color(w->fields[1]);
-    strncpy(m->time,   w->fields[2], sizeof(m->time)   - 1); m->time[sizeof(m->time) - 1] = '\0';
-    wc_utf8_copy(m->text, w->fields[3], sizeof(m->text));
-    strncpy(m->id,     w->fields[4], sizeof(m->id)     - 1); m->id[sizeof(m->id) - 1] = '\0';
-    m->truncated = (w->fields[5][0] == '1');
-    m->mentions_me = (w->n_fields >= 7) && (w->fields[6][0] == '1');
-    s_count++;
+    if (parse_message_row(&rows[i], &s_msgs[s_count])) s_count++;
   }
   s_state = (s_count == 0) ? ST_EMPTY : ST_READY;
+  // A fresh initial/poll batch means there could be older history beyond what
+  // we showed; allow another load-older attempt on scroll-up.
+  s_at_oldest = false;
 
   const char *new_newest = s_count > 0 ? s_msgs[s_count - 1].id : "";
   bool changed = (strncmp(prev_newest, new_newest, sizeof(prev_newest)) != 0);
@@ -148,12 +213,30 @@ static void on_rows_done(WcRow *rows, int count) {
 
 static void on_rows_err(int code) {
   s_fetching = false;
+  if (s_loading_older) {
+    // Don't surface load-older errors as a screen-replacing ST_ERROR. The user
+    // still has the messages they had; just stop trying for this session.
+    s_loading_older = false;
+    s_at_oldest = true;
+    return;
+  }
   if (!s_menu) return;
   if (s_state != ST_READY) {           // keep showing existing messages if a poll just failed
     s_err_code = code;
     s_state = ST_ERROR;
     menu_layer_reload_data(s_menu);
   }
+}
+
+static void fetch_older(void) {
+  if (s_loading_older || s_at_oldest || s_fetching) return;
+  if (s_state != ST_READY || s_count == 0) return;
+  if (s_count >= WC_MAX_MSGS) return;  // buffer full; user must scroll down to drop
+  s_loading_older = true;
+  s_fetching = true;
+  // Oldest currently loaded; Discord returns 30 messages older than this.
+  wc_rows_fetch_with_text(OP_MESSAGES_BEFORE, s_channel_id, s_msgs[0].id,
+                          on_rows_done, on_rows_err);
 }
 
 // show_loading=true for the initial/explicit fetch (shows the Loading screen);
@@ -173,10 +256,16 @@ static void poll_cb(void *data) {
   (void)data;
   s_poll = NULL;
   if (!s_window) return;
-  // Only fetch when the chat is actually on top — otherwise a sub-screen (read-full,
-  // compose) owns the shared rows module. Keep the timer alive so polling resumes
-  // when the user returns.
-  if (window_stack_get_top_window() == s_window) do_fetch(false);
+  // Only fetch when the chat is on top AND the user is at the bottom of the
+  // list. A poll is a wholesale replace; if the user has scrolled up to read
+  // (or just loaded older history via OP_MESSAGES_BEFORE) the replace would
+  // throw away their current view. They'll get fresh data when they scroll
+  // back down to the newest and the next poll fires.
+  if (window_stack_get_top_window() == s_window && s_menu) {
+    MenuIndex sel = menu_layer_get_selected_index(s_menu);
+    bool at_bottom = (s_count > 0 && sel.row >= s_count - 1);
+    if (at_bottom) do_fetch(false);
+  }
   int sec = s_settings->poll_seconds;
   if (sec > 0) s_poll = app_timer_register((uint32_t)sec * 1000, poll_cb, NULL);
 }
@@ -251,6 +340,20 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
 
+// When the user scrolls to the top of the chat, kick off OP_MESSAGES_BEFORE to
+// drop the next 30 older messages into s_msgs. The selection_changed callback
+// fires after every cursor move; we only act when row 0 is the new position.
+static void selection_changed(struct MenuLayer *m, MenuIndex new_index,
+                              MenuIndex old_index, void *callback_context) {
+  (void)m; (void)callback_context;
+  // Pre-fetch older when the user is approaching the top — by row 2 we want
+  // the older batch ready so they don't see a stall when they push past row 0.
+  // (MenuLayer doesn't always fire a callback at row 0 itself.)
+  if (s_state == ST_READY && new_index.row <= 2 && new_index.row < old_index.row) {
+    fetch_older();
+  }
+}
+
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   (void)m; (void)ci; (void)ctx;
   if (s_state != ST_READY && s_state != ST_EMPTY) return;
@@ -275,13 +378,16 @@ static void window_load(Window *w) {
   GRect b = layer_get_bounds(root);
   s_width = b.size.w;
 
+  s_msgs = (Msg*)malloc(sizeof(Msg) * WC_MAX_MSGS);
+  if (!s_msgs) { s_state = ST_ERROR; s_err_code = 3; }
   s_menu = menu_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
-    .get_num_rows      = get_num_rows,
-    .get_cell_height   = get_cell_height,
-    .draw_row          = draw_row,
-    .select_click      = select_click,
-    .select_long_click = select_long_click,
+    .get_num_rows         = get_num_rows,
+    .get_cell_height      = get_cell_height,
+    .draw_row             = draw_row,
+    .select_click         = select_click,
+    .select_long_click    = select_long_click,
+    .selection_changed    = selection_changed,
   });
 
   GColor bg = wc_theme_bg(s_settings);
@@ -305,6 +411,8 @@ static void window_unload(Window *w) {
   menu_layer_destroy(s_menu); s_menu = NULL;
   text_layer_destroy(s_titlebar); s_titlebar = NULL;
   window_destroy(s_window); s_window = NULL;
+  free(s_msgs); s_msgs = NULL;
+  s_count = 0;
 }
 
 // ── public interface ──────────────────────────────────────────────────────────
@@ -321,6 +429,8 @@ void chat_view_window_push(WristcordSettings *settings, const char *channel_id, 
   s_channel_id[sizeof(s_channel_id) - 1] = '\0';
   wc_utf8_copy(s_channel_name, channel_name ? channel_name : "", sizeof(s_channel_name));
   s_acked_id[0] = '\0';
+  s_loading_older = false;
+  s_at_oldest = false;
 
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));
