@@ -171,6 +171,26 @@ static void open_help_menu(void) {
 }
 
 // ── server sort + trim ────────────────────────────────────────────────────────
+// Advance past a leading "decoration" prefix on a server name: ASCII
+// non-alphanumerics (`!`, `.`, `-`, etc.) AND whole multi-byte UTF-8 code
+// points (emoji, flags). Users often prefix server names with these to float
+// them in Discord's own UI; alphabetical mode should sort by what's after
+// the decoration.
+static const char *skip_alpha_decorations(const char *s) {
+  while (*s) {
+    unsigned char c = (unsigned char)*s;
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) break;
+    int len;
+    if (c < 0x80)             len = 1;            // ASCII non-alphanumeric
+    else if ((c >> 5) == 0x6) len = 2;            // 2-byte UTF-8 lead
+    else if ((c >> 4) == 0xE) len = 3;            // 3-byte UTF-8 lead
+    else if ((c >> 3) == 0x1E) len = 4;           // 4-byte UTF-8 lead (most emoji)
+    else                      len = 1;            // continuation / invalid → step 1
+    s += len;
+  }
+  return s;
+}
+
 // Returns negative if a should sort before b, positive otherwise.
 static int compare_guilds(const HRow *a, const HRow *b, WcSortMode mode) {
   switch (mode) {
@@ -186,14 +206,10 @@ static int compare_guilds(const HRow *a, const HRow *b, WcSortMode mode) {
     case WC_SORT_DISCORD_ORDER:
       return a->discord_pos - b->discord_pos;
     case WC_SORT_ALPHABETICAL: {
-      // Case-insensitive ASCII compare, skipping a leading non-alphanumeric
-      // prefix (a lot of users name servers ". something" or "! priority" to
-      // float them; alphabetical sort should ignore that decoration).
-      const char *pa = a->name, *pb = b->name;
-      while (*pa && !((*pa >= 'A' && *pa <= 'Z') || (*pa >= 'a' && *pa <= 'z') ||
-                      (*pa >= '0' && *pa <= '9'))) pa++;
-      while (*pb && !((*pb >= 'A' && *pb <= 'Z') || (*pb >= 'a' && *pb <= 'z') ||
-                      (*pb >= '0' && *pb <= '9'))) pb++;
+      // Case-insensitive ASCII compare, after skipping any leading decoration
+      // (ASCII non-alphanumerics + UTF-8 emoji / multi-byte code points).
+      const char *pa = skip_alpha_decorations(a->name);
+      const char *pb = skip_alpha_decorations(b->name);
       while (*pa && *pb) {
         char ca = *pa, cb = *pb;
         if (ca >= 'A' && ca <= 'Z') ca += 32;
@@ -201,7 +217,11 @@ static int compare_guilds(const HRow *a, const HRow *b, WcSortMode mode) {
         if (ca != cb) return (int)(unsigned char)ca - (int)(unsigned char)cb;
         pa++; pb++;
       }
-      return (int)(unsigned char)*pa - (int)(unsigned char)*pb;
+      int tail = (int)(unsigned char)*pa - (int)(unsigned char)*pb;
+      // Deterministic tiebreak when both stripped names are equal (e.g., two
+      // emoji-only servers, or duplicate names) — fall back to Discord order.
+      if (tail != 0) return tail;
+      return a->discord_pos - b->discord_pos;
     }
     case WC_SORT_RECENT_ACTIVITY: {
       int la = (int)strlen(a->mostrecent), lb = (int)strlen(b->mostrecent);
