@@ -4,8 +4,15 @@
 #define RS '\x1E'
 #define US '\x1F'
 
-static char s_buf[WC_ROWS_BUF];
+// Heap-allocated so it doesn't eat into the 64KB image-size cap (HANDOFF
+// gotcha #3). Allocated lazily on first wc_rows_fetch; never freed since the
+// row module is alive for the whole app lifetime.
+static char *s_buf;
 static int s_len;
+static bool ensure_buf(void) {
+  if (!s_buf) s_buf = (char*)malloc(WC_ROWS_BUF);
+  return s_buf != NULL;
+}
 static uint8_t s_op;
 static char s_id[24];
 static char s_text[24];               // optional TEXT for ops like OP_MESSAGES_BEFORE
@@ -77,6 +84,7 @@ void wc_rows_fetch(uint8_t op, const char *id, WcRowsDone done, WcRowsErr err) {
 
 void wc_rows_fetch_with_text(uint8_t op, const char *id, const char *text,
                              WcRowsDone done, WcRowsErr err) {
+  if (!ensure_buf()) { if (err) err(3); return; }
   s_op = op; s_page = 0; s_len = 0; s_buf[0] = '\0';
   strncpy(s_id, id ? id : "", sizeof(s_id) - 1); s_id[sizeof(s_id) - 1] = '\0';
   if (text) {
@@ -124,6 +132,7 @@ void wc_rows_handle_inbox(DictionaryIterator *it) {
   Tuple *rows = dict_find(it, MESSAGE_KEY_ROWS);
   if (!op || !rows) return;             // not a rows response (e.g. a settings push)
   if (!s_active) return;
+  if (!s_buf) return;                   // guard: ensure_buf failed at fetch time
 
   const char *chunk = rows->value->cstring;
   int clen = chunk ? (int)strlen(chunk) : 0;

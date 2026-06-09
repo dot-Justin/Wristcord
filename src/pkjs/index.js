@@ -261,6 +261,20 @@ function sendPage(op, page) {
 
 Pebble.addEventListener('appmessage', function (e) {
   var p = e.payload || {};
+  // Watch → pkjs settings push: the on-watch Sort submenu sends a
+  // PUSH_SORT_MODE int when the user picks a new mode. Persist it so the next
+  // Clay config-page open reflects the change.
+  if (p.PUSH_SORT_MODE !== undefined && p.PUSH_SORT_MODE !== null) {
+    try {
+      var cur = settingsLib.normalize(JSON.parse(localStorage.getItem('wc_settings') || '{}'));
+      var idx = p.PUSH_SORT_MODE | 0;
+      var name = (settingsLib.SORT_MODES || [])[idx];
+      if (name) {
+        cur.sortMode = name;
+        saveSettings(cur);
+      }
+    } catch (e2) {}
+  }
   var op = p.OP, id = p.ID || '', page = p.PAGE || 0;
   if (!op) return;                 // not a data request (e.g. settings echo)
   if (op === OP_SEND) {

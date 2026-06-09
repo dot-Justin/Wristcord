@@ -4,7 +4,9 @@
 
 #define WC_MAX_ROWS 128
 #define WC_MAX_FIELDS 10
-#define WC_ROWS_BUF 4096
+// Heap-allocated; sized to fit OP_HOME with the user's full guild list plus
+// DMs and section headers. ~80B per row × 128 rows = 10240 bytes max.
+#define WC_ROWS_BUF 10240
 
 typedef struct { const char *fields[WC_MAX_FIELDS]; int n_fields; } WcRow;
 typedef void (*WcRowsDone)(WcRow *rows, int count);

@@ -79,8 +79,10 @@ static void anim_cb(void *d) {
 static void start_loading_anim(void) { s_anim_frame = 0; stop_loading_anim(); s_anim = app_timer_register(300, anim_cb, NULL); }
 
 // Forward declarations so the action-menu callback (defined first) can refer
-// to the sort+trim function (defined later, near on_rows_done).
+// to the sort+trim and refetch functions (defined later, near on_rows_done).
 static void apply_server_sort_and_trim(void);
+static void on_rows_done(WcRow *rows, int count);
+static void on_rows_err(int code);
 
 // ── Help / Settings action menu (long-press anywhere) ────────────────────────
 static ActionMenuLevel *s_am_level;
@@ -118,15 +120,26 @@ static void am_settings_info(ActionMenu *m, const ActionMenuItem *item, void *ct
   (void)m; (void)item; (void)ctx;
   push_info_window();
 }
-// Sort-mode picker. Selecting a row persists the new mode and re-sorts the
-// current home page in place — no refetch needed.
+// Sort-mode picker. Selecting a row persists the new mode, re-fetches so the
+// full guild list is on hand again, and pushes the change up to pkjs so the
+// Clay config page reflects it next time the phone opens it.
 static void am_pick_sort(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
   (void)m; (void)ctx;
   WcSortMode picked = (WcSortMode)(uintptr_t)action_menu_item_get_action_data(item);
+  if (picked == s_settings->sort_mode) return;
   s_settings->sort_mode = picked;
   wc_settings_save(s_settings);
-  // Re-apply sort to whatever's on screen.
-  if (s_state == ST_READY) {
+  // Push up to pkjs so the next Clay open shows the same value.
+  DictionaryIterator *out;
+  if (app_message_outbox_begin(&out) == APP_MSG_OK && out) {
+    dict_write_uint8(out, MESSAGE_KEY_PUSH_SORT_MODE, (uint8_t)picked);
+    app_message_outbox_send();
+  }
+  // Re-fetch so the (possibly previously trimmed) guild list is whole again
+  // before the new sort is applied.
+  if (s_settings->has_token) {
+    wc_rows_fetch(OP_HOME, "", on_rows_done, on_rows_err);
+  } else if (s_state == ST_READY) {
     apply_server_sort_and_trim();
     if (s_menu) menu_layer_reload_data(s_menu);
   }
@@ -568,7 +581,12 @@ void server_list_handle_settings(void) {
     menu_layer_set_highlight_colors(s_menu, s_settings->accent, GColorWhite);
   }
   if (s_settings->has_token && s_state == ST_NOTOKEN) start_fetch();
-  else if (s_menu) menu_layer_reload_data(s_menu);
+  else if (s_state == ST_READY && s_settings->has_token) {
+    // A Clay save may have changed sort_mode and/or server_count. Re-fetch so
+    // the full guild list is on hand (we may have trimmed the previous one),
+    // then the on_rows_done path applies the new sort.
+    wc_rows_fetch(OP_HOME, "", on_rows_done, on_rows_err);
+  } else if (s_menu) menu_layer_reload_data(s_menu);
 }
 
 // Called when pkjs's gateway reaches READY post-launch — the home page's first
