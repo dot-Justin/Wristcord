@@ -44,6 +44,10 @@ static char            s_acked_id[20];  // last message id we've ACK'd this sess
 // true when a load-older fetch returns zero rows.
 static bool            s_loading_older;
 static bool            s_at_oldest;
+// Race: if the user scrolls past row 2 while an ambient poll is in flight,
+// fetch_older would early-return on s_fetching. We instead remember the request
+// and fire it as soon as the poll completes.
+static bool            s_pending_older;
 
 // ── ActionMenu state ──────────────────────────────────────────────────────────
 
@@ -86,6 +90,10 @@ static void open_action_menu(void) {
   action_menu_open(&config);
 }
 
+// Forward decl — on_rows_done calls fetch_older to drain a queued load-older
+// request that arrived while a wholesale-replace fetch was in flight.
+static void fetch_older(void);
+
 // ── rows callbacks ────────────────────────────────────────────────────────────
 
 // Parse one WcRow into a Msg slot. Returns true if the row was a valid message.
@@ -112,13 +120,28 @@ static void on_rows_done(WcRow *rows, int count) {
   if (s_loading_older) {
     s_loading_older = false;
     if (count <= 0 || !s_msgs) { s_at_oldest = true; return; }
-    // Cap how many we ingest now so we know how much room they need at the top.
-    int n_in_max = WC_MAX_MSGS;
+    // Anchor preservation: the user is looking at row prev_sel.row right now;
+    // after the prepend that message must still be on screen. Keep at least
+    // (prev_sel.row + 1) of the existing buffer so the anchor isn't dropped
+    // off the tail. Worst case we ingest fewer older messages than Discord
+    // returned, which is fine — the next scroll-up triggers another fetch.
+    MenuIndex prev_sel_pre = menu_layer_get_selected_index(s_menu);
+    int anchor_keep_min = prev_sel_pre.row + 1;
+    if (anchor_keep_min > s_count) anchor_keep_min = s_count;
+    int n_in_max = WC_MAX_MSGS - anchor_keep_min;
     if (n_in_max > count) n_in_max = count;
+    if (n_in_max < 1) {
+      // Buffer is already full of messages the user is reading; can't fit any
+      // older without dropping the anchor. Treat as "no more for now" — they
+      // can re-trigger after scrolling down (which would drop the tail) and
+      // back up.
+      return;
+    }
     // Drop newest from the tail if combining would exceed the cap. The user is
     // reading history right now; the bottom of the buffer is the least useful.
     int keep_existing = s_count;
     if (n_in_max + keep_existing > WC_MAX_MSGS) keep_existing = WC_MAX_MSGS - n_in_max;
+    if (keep_existing < anchor_keep_min) keep_existing = anchor_keep_min;
     if (keep_existing < 0) keep_existing = 0;
     // Shift existing forward into [n_in_max, n_in_max+keep_existing) BEFORE
     // we write the new messages — otherwise we'd clobber them.
@@ -180,14 +203,15 @@ static void on_rows_done(WcRow *rows, int count) {
   const char *new_newest = s_count > 0 ? s_msgs[s_count - 1].id : "";
   bool changed = (strncmp(prev_newest, new_newest, sizeof(prev_newest)) != 0);
 
-  // Only repaint when something actually changed (or on the initial load) so an
-  // ambient poll never disturbs a user mid-scroll when there's nothing new.
-  if (was_loading || changed) {
-    menu_layer_reload_data(s_menu);
-    if (s_count > 0 && at_bottom) {
-      menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = s_count - 1 },
-                                    MenuRowAlignBottom, false);   // newest at bottom
-    }
+  // Always reload so the visible rows refresh — fields like mentions_me can
+  // change without the newest_id changing (e.g., gateway becomes READY mid-
+  // session and the next poll repopulates mention bits). Reload preserves the
+  // current scroll position; we only auto-scroll to newest below when the
+  // newest message actually moved.
+  menu_layer_reload_data(s_menu);
+  if ((was_loading || changed) && s_count > 0 && at_bottom) {
+    menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = s_count - 1 },
+                                  MenuRowAlignBottom, false);   // newest at bottom
   }
   if (s_count > 0 && at_bottom) {
     const char *newest = s_msgs[s_count - 1].id;
@@ -209,6 +233,12 @@ static void on_rows_done(WcRow *rows, int count) {
       }
     }
   }
+  // If selection_changed wanted to fetch older while we were busy, satisfy it
+  // now. Single-shot — fetch_older itself sets s_pending_older=true if needed.
+  if (s_pending_older) {
+    s_pending_older = false;
+    fetch_older();
+  }
 }
 
 static void on_rows_err(int code) {
@@ -229,9 +259,17 @@ static void on_rows_err(int code) {
 }
 
 static void fetch_older(void) {
-  if (s_loading_older || s_at_oldest || s_fetching) return;
+  if (s_loading_older || s_at_oldest) return;
   if (s_state != ST_READY || s_count == 0) return;
   if (s_count >= WC_MAX_MSGS) return;  // buffer full; user must scroll down to drop
+  if (s_fetching) {
+    // A wholesale-replace fetch (initial or poll) is in flight; queue ourselves
+    // for as-soon-as it finishes. Without this, scrolling up while a poll's
+    // request is in the air loses the load-older trigger until the user
+    // scrolls down and back up.
+    s_pending_older = true;
+    return;
+  }
   s_loading_older = true;
   s_fetching = true;
   // Oldest currently loaded; Discord returns 30 messages older than this.

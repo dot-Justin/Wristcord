@@ -41,6 +41,10 @@ var gateway = gatewayLib.create({
   getToken: currentToken,
   onStateChange: function (newState) {
     if (newState === 'READY') {
+      // Invalidate any cached row pages that used "no gateway yet" data —
+      // they shipped without mentionsMe (myUserId was null) and without
+      // mention/unread badges. Next request will rebuild against the live map.
+      cacheKey = null;
       try { Pebble.sendAppMessage({ HOME_REFRESH: 1 }); } catch (e) {}
     }
   }
