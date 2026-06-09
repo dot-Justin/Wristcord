@@ -9,6 +9,7 @@ var clayLib = require('./lib/clay');
 var discordLib = require('./lib/discord');
 var model = require('./lib/model');
 var paging = require('./lib/paging');
+var gatewayLib = require('./lib/gateway');
 
 // DEMO_MODE: routes Discord REST calls to a fake backend (lib/demo.js) instead of
 // the network. Used only to capture marketing screenshots — kept false for prod.
@@ -31,8 +32,17 @@ function pushToWatch(s) {
     function (e) { console.log('settings -> watch FAIL ' + JSON.stringify(e)); });
 }
 
+// ---- Gateway: maintains canonical read_state while the watchapp is open ----
+var gateway = gatewayLib.create({ getToken: currentToken });
+function ensureGateway() {
+  if (DEMO_MODE) return;                       // demo backend, no real auth
+  var token = currentToken();
+  if (token) gateway.start();
+}
+
 Pebble.addEventListener('ready', function () {
   pushToWatch(loadSettings());
+  ensureGateway();
 });
 
 // Clay config closed: persist + push
@@ -45,6 +55,9 @@ Pebble.addEventListener('webviewclosed', function (e) {
   var merged = settingsLib.normalize(clayLib.unwrap(dict));
   saveSettings(merged);
   pushToWatch(merged);
+  // Token may have changed; refresh the gateway connection.
+  gateway.stop();
+  ensureGateway();
 });
 
 // ---- Discord request adapter (XHR; attaches the user token) ----
@@ -70,7 +83,7 @@ function makeXhrRequest(getToken) {
 }
 
 // ---- OP router with a simple page cache ----
-var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4, OP_MSG_FULL = 5;
+var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4, OP_MSG_FULL = 5, OP_ACK = 6;
 var MAX_ROWS_LEN = 1400;   // bytes of ROWS per batch (C inbox is 2048)
 var cacheKey = null, cacheBatches = [];
 var lastFullById = {};
@@ -112,8 +125,15 @@ function buildRecords(op, id) {
   if (op === OP_CHANNELS) {
     return client.channels(id).then(function (ch) {
       if (ch.status !== 200) return { err: mapStatusErr(ch.status) };
-      var rows = model.buildChannelTree(ch.json);
-      return { records: rows.map(function (r) { return [r.kind, r.id, r.name, r.parentIndex, r.lastMessageId || '']; }) };
+      // Join with the gateway's read_state if the connection is live; otherwise
+      // emit empty unread/mention fields and let the C side fall back to the
+      // local-persist readstate heuristic.
+      var lookup = (gateway.getState() === 'READY') ? gateway.getReadState : null;
+      var rows = model.buildChannelTree(ch.json, lookup);
+      return { records: rows.map(function (r) {
+        return [r.kind, r.id, r.name, r.parentIndex,
+                r.lastMessageId || '', r.unread || '', r.mentionCount || ''];
+      }) };
     });
   }
   if (op === OP_MESSAGES) {
@@ -151,6 +171,18 @@ Pebble.addEventListener('appmessage', function (e) {
     }).catch(function () {
       Pebble.sendAppMessage({ OP: OP_SEND, PAGE: 0, MORE: 0, ROWS: '', ERR: 3 });
     });
+    return;
+  }
+  if (op === OP_ACK) {
+    // Fire-and-forget watch-read ACK. Optimistically update the local gateway
+    // map so the next OP_CHANNELS reflects it immediately; the gateway's own
+    // MESSAGE_ACK echo will follow.
+    var msgId = p.TEXT || '';
+    if (id && msgId) {
+      gateway.markRead(id, msgId);
+      var ackClient = discordLib.makeClient(makeXhrRequest(currentToken));
+      ackClient.ack(id, msgId).catch(function () { /* silent: gateway will recover */ });
+    }
     return;
   }
 

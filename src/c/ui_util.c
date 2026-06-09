@@ -147,6 +147,37 @@ TextLayer *wc_titlebar_create(Layer *root, GRect bounds, const char *title, Wris
   return t;
 }
 
+void wc_draw_unread_dot(GContext *ctx, GPoint center, bool selected,
+                        WristcordSettings *settings) {
+  GColor color = selected ? GColorWhite : wc_theme_fg(settings);
+  graphics_context_set_fill_color(ctx, color);
+  graphics_fill_circle(ctx, center, 3);
+}
+
+void wc_draw_mention_badge(GContext *ctx, GRect box, int mention_count) {
+  if (mention_count <= 0) return;
+  int cx = box.origin.x + box.size.w / 2;
+  int cy = box.origin.y + box.size.h / 2;
+  int r = box.size.w / 2;
+  if (r > 9) r = 9;                               // cap so 18px ø badge stays compact
+  graphics_context_set_fill_color(ctx, GColorRed);
+  graphics_fill_circle(ctx, GPoint(cx, cy), r);
+  char buf[4];
+  if (mention_count > 99) {
+    buf[0] = '9'; buf[1] = '9'; buf[2] = '\0';
+  } else if (mention_count > 9) {
+    buf[0] = '0' + (mention_count / 10);
+    buf[1] = '0' + (mention_count % 10);
+    buf[2] = '\0';
+  } else {
+    buf[0] = '0' + mention_count; buf[1] = '\0';
+  }
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+    GRect(cx - r, cy - 10, r * 2, 18),
+    GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+}
+
 void wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
   // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
   int cx = box.origin.x + box.size.w / 2;

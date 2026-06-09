@@ -68,6 +68,14 @@ test('sendMessage(channelId, content) calls POST /channels/{channelId}/messages 
   assert.deepStrictEqual(r, { status: 200, json: { ok: true } });
 });
 
+test('ack(channelId, messageId) calls POST /channels/{cid}/messages/{mid}/ack with {manual:true}', async () => {
+  const m = mock();
+  const c = makeClient(m.request);
+  const r = await c.ack('cid', 'mid');
+  assert.deepStrictEqual(m.calls[0], { method: 'POST', path: '/channels/cid/messages/mid/ack', body: { manual: true } });
+  assert.deepStrictEqual(r, { status: 200, json: { ok: true } });
+});
+
 test('all methods return the promise from request', async () => {
   const m = mock();
   const c = makeClient(m.request);

@@ -130,14 +130,29 @@ function buildServerList(guilds, userSettings) {
   return rows;
 }
 
+// Snowflake compare without BigInt: same length -> lex, else longer wins.
+function snowflakeGt(a, b) {
+  if (!a) return false;
+  if (!b) return true;
+  if (a.length !== b.length) return a.length > b.length;
+  return a > b;
+}
+
 /**
- * buildChannelTree(channels) -> flat ordered array of row objects.
+ * buildChannelTree(channels, readStateLookup?) -> flat ordered array of row objects.
+ *
+ * readStateLookup: optional fn(channelId) -> {lastReadId, mentionCount} | null.
+ * When present, text-channel rows include `unread` ('0'/'1'/'') + `mentionCount`
+ * ('0' decimal string) derived from the gateway's read-state map. When omitted
+ * or returns null for a channel, both fields are empty strings so the C side
+ * falls back to the local-persist readstate heuristic.
  *
  * Row kinds:
  *   {kind:'c', id, name, parentIndex:''}              -- category
- *   {kind:'t', id, name, parentIndex}                 -- text channel
+ *   {kind:'t', id, name, parentIndex,                 -- text channel
+ *      lastMessageId, unread, mentionCount}
  */
-function buildChannelTree(channels) {
+function buildChannelTree(channels, readStateLookup) {
   var TEXT_TYPES = { 0: true, 5: true };  // 5 = announcement, treat as text
   var CAT_TYPE = 4;
 
@@ -166,23 +181,46 @@ function buildChannelTree(channels) {
 
   var rows = [];
 
+  function makeChannelRow(ch, parentIndex) {
+    var lastMsg = String(ch.last_message_id || '');
+    var unread = '';
+    var mentionCount = '';
+    if (typeof readStateLookup === 'function') {
+      var rs = readStateLookup(ch.id);
+      if (rs) {
+        unread = (lastMsg && snowflakeGt(lastMsg, rs.lastReadId || '0')) ? '1' : '0';
+        mentionCount = String(rs.mentionCount | 0);
+      } else {
+        // Gateway is live but Discord has no read_state entry for this channel —
+        // that means Discord considers it read (user has never had unread
+        // activity there). Emit '0' explicitly so the C side trusts Discord
+        // instead of falling back to the local "have I shown this" heuristic.
+        unread = '0';
+        mentionCount = '0';
+      }
+    }
+    return {
+      kind: 't', id: ch.id, name: ch.name, parentIndex: parentIndex,
+      lastMessageId: lastMsg, unread: unread, mentionCount: mentionCount
+    };
+  }
+
   // Uncategorized first
   for (var ui = 0; ui < uncategorized.length; ui++) {
-    var u = uncategorized[ui];
-    rows.push({ kind: 't', id: u.id, name: u.name, parentIndex: '', lastMessageId: String(u.last_message_id || '') });
+    rows.push(makeChannelRow(uncategorized[ui], ''));
   }
 
   // Categories with their children
   for (var ci = 0; ci < categories.length; ci++) {
     var cat = categories[ci];
     var catIndex = rows.length;
-    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '', lastMessageId: '' });
+    rows.push({ kind: 'c', id: cat.id, name: cat.name, parentIndex: '',
+                lastMessageId: '', unread: '', mentionCount: '' });
 
     var children = byParent[cat.id] || [];
     children.sort(function(a, b) { return a.position - b.position; });
     for (var ki = 0; ki < children.length; ki++) {
-      var ch2 = children[ki];
-      rows.push({ kind: 't', id: ch2.id, name: ch2.name, parentIndex: catIndex, lastMessageId: String(ch2.last_message_id || '') });
+      rows.push(makeChannelRow(children[ki], catIndex));
     }
   }
 

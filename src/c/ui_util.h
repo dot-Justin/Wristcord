@@ -19,6 +19,14 @@ void   wc_make_initials(const char *name, char *out, size_t cap);   // out shoul
 void   wc_draw_dot(GContext *ctx, GPoint center, int radius, GColor color, const char *initials);
 void   wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color);
 
+// Draw a small white filled-circle "unread" dot at `center`. Matches v1.
+void   wc_draw_unread_dot(GContext *ctx, GPoint center, bool selected,
+                          WristcordSettings *settings);
+
+// Draw a red filled circle with a white centered number, fitted to `box`.
+// Counts > 99 clamp to "99" (no "+" — the circle isn't wide enough for 3 chars).
+void   wc_draw_mention_badge(GContext *ctx, GRect box, int mention_count);
+
 // Create a 20px themed title bar (surface bg + bold title) at the top of `root`.
 // Returns the TextLayer; caller destroys it on unload. `title` must remain valid
 // for the lifetime of the layer (static/const string or persistent static buffer).
