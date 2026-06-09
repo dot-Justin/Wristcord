@@ -181,7 +181,11 @@ static void window_load(Window *w) {
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
   s_titlebar = wc_titlebar_create(root, b, "Servers", s_settings);
-  start_fetch();
+  // Skip the fetch on OOM — on_rows_done would early-return on !s_all and the
+  // user would be stuck on "Loading…". ST_ERROR is already set above so the
+  // status cell shows "Couldn't load servers." instead.
+  if (s_all && s_visible) start_fetch();
+  else if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void window_unload(Window *w) {
   (void)w;

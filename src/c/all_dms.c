@@ -117,7 +117,11 @@ static void window_load(Window *w) {
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
   s_titlebar = wc_titlebar_create(root, b, "Direct Messages", s_settings);
-  start_fetch();
+  // Skip the network round-trip on OOM — start_fetch would land in
+  // on_rows_done which would bail on `!s_all`, leaving the user staring at
+  // "Loading…" forever. ST_ERROR was already set above; just show it.
+  if (s_all) start_fetch();
+  else if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void window_unload(Window *w) {
   (void)w;
