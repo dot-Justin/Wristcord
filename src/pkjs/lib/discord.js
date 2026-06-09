@@ -12,6 +12,10 @@ function makeClient(request) {
     messages: function (channelId, limit) {
       return request('GET', '/channels/' + channelId + '/messages?limit=' + (limit || 20));
     },
+    messagesBefore: function (channelId, beforeId, limit) {
+      return request('GET', '/channels/' + channelId + '/messages?limit=' + (limit || 30) +
+                            '&before=' + beforeId);
+    },
     sendMessage: function (channelId, content) {
       return request('POST', '/channels/' + channelId + '/messages', { content: content });
     },

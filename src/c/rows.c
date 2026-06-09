@@ -8,6 +8,8 @@ static char s_buf[WC_ROWS_BUF];
 static int s_len;
 static uint8_t s_op;
 static char s_id[24];
+static char s_text[24];               // optional TEXT for ops like OP_MESSAGES_BEFORE
+static bool s_has_text;
 static uint8_t s_page;
 static bool s_active;
 static WcRowsDone s_done;
@@ -64,13 +66,26 @@ static void do_send(void *data) {
   dict_write_uint8(it, MESSAGE_KEY_OP, s_op);
   dict_write_cstring(it, MESSAGE_KEY_ID, s_id);
   dict_write_uint8(it, MESSAGE_KEY_PAGE, s_page);
+  if (s_has_text) dict_write_cstring(it, MESSAGE_KEY_TEXT, s_text);
   app_message_outbox_send();
 }
 static void send_request(void) { do_send(NULL); }
 
 void wc_rows_fetch(uint8_t op, const char *id, WcRowsDone done, WcRowsErr err) {
+  wc_rows_fetch_with_text(op, id, NULL, done, err);
+}
+
+void wc_rows_fetch_with_text(uint8_t op, const char *id, const char *text,
+                             WcRowsDone done, WcRowsErr err) {
   s_op = op; s_page = 0; s_len = 0; s_buf[0] = '\0';
   strncpy(s_id, id ? id : "", sizeof(s_id) - 1); s_id[sizeof(s_id) - 1] = '\0';
+  if (text) {
+    strncpy(s_text, text, sizeof(s_text) - 1); s_text[sizeof(s_text) - 1] = '\0';
+    s_has_text = true;
+  } else {
+    s_text[0] = '\0';
+    s_has_text = false;
+  }
   s_done = done; s_err = err; s_active = true;
   s_retries = 0;
   send_request();

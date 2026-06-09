@@ -53,6 +53,10 @@ static HRow s_rows[WC_MAX_ROWS];
 static int s_count;
 static LoadState s_state;
 static int s_err_code;
+// True until we've placed the cursor on the first DM row after the very first
+// successful fetch of this window's lifetime. Refetches (window_appear silent
+// reload, HOME_REFRESH from pkjs) must NOT yank selection back to the top.
+static bool s_needs_initial_focus;
 
 // Animated loading screen
 static GBitmap  *s_logo;
@@ -167,18 +171,23 @@ static void on_rows_done(WcRow *rows, int count) {
   stop_loading_anim();
   if (s_menu) {
     menu_layer_reload_data(s_menu);
-    // Default focus: the first DM row (which is the first row after the DM section header).
-    int focus = -1;
-    for (int i = 0; i < s_count; i++) {
-      if (s_rows[i].kind == WC_HROW_DM) { focus = i; break; }
-    }
-    if (focus < 0) {
+    // Only place the cursor on first load. Silent refetches (window_appear
+    // after returning from a sub-window, or HOME_REFRESH from pkjs once the
+    // gateway hits READY) must preserve the user's current selection.
+    if (s_needs_initial_focus) {
+      int focus = -1;
       for (int i = 0; i < s_count; i++) {
-        if (s_rows[i].kind == WC_HROW_GUILD) { focus = i; break; }
+        if (s_rows[i].kind == WC_HROW_DM) { focus = i; break; }
       }
+      if (focus < 0) {
+        for (int i = 0; i < s_count; i++) {
+          if (s_rows[i].kind == WC_HROW_GUILD) { focus = i; break; }
+        }
+      }
+      if (focus < 0) focus = 0;
+      menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = focus }, MenuRowAlignCenter, false);
+      s_needs_initial_focus = false;
     }
-    if (focus < 0) focus = 0;
-    menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = focus }, MenuRowAlignCenter, false);
   }
 }
 static void on_rows_err(int code) {
@@ -282,8 +291,9 @@ static void draw_initials_row(GContext *ctx, GRect b, HRow *r, bool selected) {
   char ini[8]; wc_make_initials(r->name, ini, sizeof(ini));
   GPoint disc_c = GPoint(b.origin.x + 6 + 11, b.origin.y + b.size.h / 2);
   wc_draw_dot(ctx, disc_c, 11, r->color, ini);
-  int badge_count = r->ping_count > 0 ? r->ping_count : (r->unread ? 1 : 0);
-  wc_draw_ping_marker(ctx, disc_c, 11, badge_count, s_settings);
+  // Discord-style: ping badge ONLY for @mentions, never for plain unread.
+  // The user can still see per-channel unread dots in the channel list.
+  wc_draw_ping_marker(ctx, disc_c, 11, r->ping_count, s_settings);
   graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
     GRect(b.origin.x + 34, b.origin.y + 9, b.size.w - 38, 24),
@@ -417,6 +427,7 @@ void server_list_window_push(WristcordSettings *settings) {
   s_settings = settings;
   s_tut_checked = false;
   s_was_hidden = false;
+  s_needs_initial_focus = true;
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));
   window_set_window_handlers(s_window, (WindowHandlers){
@@ -437,4 +448,20 @@ void server_list_handle_settings(void) {
   }
   if (s_settings->has_token && s_state == ST_NOTOKEN) start_fetch();
   else if (s_menu) menu_layer_reload_data(s_menu);
+}
+
+// Called when pkjs's gateway reaches READY post-launch — the home page's first
+// fetch landed during IDENTIFYING and had no DMs. Silent refetch so the new
+// data drops in without flashing a Loading screen.
+void server_list_handle_home_refresh(void) {
+  if (!s_window || !s_settings->has_token) return;
+  // Only refetch when home is actually on top — if the user is in a server, we
+  // don't want to step on the channel-list fetch.
+  if (window_stack_get_top_window() != s_window) return;
+  if (s_state == ST_READY) {
+    // Silent: keep current rows on screen while the new ones come in.
+    wc_rows_fetch(OP_HOME, "", on_rows_done, on_rows_err);
+  } else {
+    start_fetch();
+  }
 }

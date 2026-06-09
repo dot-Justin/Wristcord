@@ -14,6 +14,11 @@ typedef void (*WcRowsErr)(int err_code);
 // callbacks fires when the whole paged response is complete or fails.
 void wc_rows_fetch(uint8_t op, const char *id, WcRowsDone done, WcRowsErr err);
 
+// Same as wc_rows_fetch but also sets MESSAGE_KEY_TEXT on the request. Used by
+// chat_view's load-older path which needs to pass a `before=<message_id>`.
+void wc_rows_fetch_with_text(uint8_t op, const char *id, const char *text,
+                             WcRowsDone done, WcRowsErr err);
+
 // Feed EVERY inbox dictionary here; it ignores messages that aren't row responses.
 void wc_rows_handle_inbox(DictionaryIterator *it);
 

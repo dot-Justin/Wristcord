@@ -33,7 +33,18 @@ function pushToWatch(s) {
 }
 
 // ---- Gateway: maintains canonical read_state while the watchapp is open ----
-var gateway = gatewayLib.create({ getToken: currentToken });
+// onStateChange fires when the gateway transitions in or out of READY. When it
+// becomes READY we push HOME_REFRESH to the watch so the home page can ask for
+// a fresh OP_HOME — the watch's initial fetch otherwise lands during
+// IDENTIFYING and comes back with no DMs (gateway.getAllDMs() is empty).
+var gateway = gatewayLib.create({
+  getToken: currentToken,
+  onStateChange: function (newState) {
+    if (newState === 'READY') {
+      try { Pebble.sendAppMessage({ HOME_REFRESH: 1 }); } catch (e) {}
+    }
+  }
+});
 function ensureGateway() {
   if (DEMO_MODE) return;                       // demo backend, no real auth
   var token = currentToken();
@@ -84,7 +95,7 @@ function makeXhrRequest(getToken) {
 
 // ---- OP router with a simple page cache ----
 var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4, OP_MSG_FULL = 5, OP_ACK = 6;
-var OP_HOME = 7, OP_DMS_ALL = 8;
+var OP_HOME = 7, OP_DMS_ALL = 8, OP_MESSAGES_BEFORE = 9;
 var MAX_ROWS_LEN = 1400;   // bytes of ROWS per batch (C inbox is 2048)
 var cacheKey = null, cacheBatches = [];
 var lastFullById = {};
@@ -109,7 +120,9 @@ function chunkText(s, size) {
 }
 
 // returns { records: [...] } or { err: <code> }
-function buildRecords(op, id) {
+// `extra` is the optional MESSAGE_KEY_TEXT value (for OP_MESSAGES_BEFORE's
+// `before` parameter). Most ops ignore it.
+function buildRecords(op, id, extra) {
   var client = discordLib.makeClient(makeXhrRequest(currentToken));
   function mapStatusErr(status) { return status === 401 ? 1 : (status === 429 ? 2 : 3); }
   if (op === OP_GUILDS) {
@@ -189,6 +202,20 @@ function buildRecords(op, id) {
     var chunks = chunkText(fullText, 100);
     return Promise.resolve({ records: chunks });
   }
+  if (op === OP_MESSAGES_BEFORE) {
+    // chat_view sends ID = channel id, TEXT = before message id (oldest currently loaded).
+    var beforeId = extra || '';
+    return client.messagesBefore(id, beforeId, 30).then(function (m) {
+      if (m.status !== 200) return { err: mapStatusErr(m.status) };
+      var rows = model.packMessages(m.json, gateway.getMyUserId());
+      // Also stash full text so OP_MSG_FULL still works on older messages.
+      rows.forEach(function (r) { lastFullById[r.id] = r.full; });
+      return { records: rows.map(function (r) {
+        return [r.author, r.color, r.time, r.text, r.id,
+                r.truncated ? '1' : '0', r.mentionsMe ? '1' : '0'];
+      }) };
+    });
+  }
   return Promise.resolve({ records: [] });
 }
 
@@ -247,9 +274,12 @@ Pebble.addEventListener('appmessage', function (e) {
     return;
   }
 
-  var key = op + ':' + id;
+  // OP_MESSAGES_BEFORE includes the `before` snowflake in the cache key so two
+  // load-older requests for the same channel don't collide.
+  var extra = p.TEXT || '';
+  var key = op + ':' + id + (op === OP_MESSAGES_BEFORE ? ':' + extra : '');
   if (page === 0 || key !== cacheKey) {
-    buildRecords(op, id).then(function (res) {
+    buildRecords(op, id, extra).then(function (res) {
       if (res.err) { Pebble.sendAppMessage({ OP: op, PAGE: 0, MORE: 0, ROWS: '', ERR: res.err }); return; }
       cacheKey = key;
       cacheBatches = paging.batches(paging.encodeRows(res.records), MAX_ROWS_LEN);

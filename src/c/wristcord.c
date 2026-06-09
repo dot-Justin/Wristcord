@@ -25,6 +25,12 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
     wc_settings_save(&s_settings);
     server_list_handle_settings();
   }
+  // pkjs nudges us when the gateway reaches READY — the home page's initial
+  // fetch lands during IDENTIFYING with no DM data, so re-fetch when we get
+  // this nudge so the DM section finally populates without the user having to
+  // navigate away and back.
+  Tuple *t = dict_find(it, MESSAGE_KEY_HOME_REFRESH);
+  if (t) server_list_handle_home_refresh();
 }
 
 static void init(void) {
