@@ -4,6 +4,7 @@
 #include "rows.h"
 #include "ui_util.h"
 #include "readstate.h"
+#include "viewstats.h"
 
 #define OP_CHANNELS 2
 #define PK_COLLAPSED_CATS 201
@@ -245,6 +246,9 @@ void channel_list_window_push(WristcordSettings *settings, const char *guild_id,
   s_settings = settings;
   strncpy(s_guild_id, guild_id ? guild_id : "", sizeof(s_guild_id) - 1); s_guild_id[sizeof(s_guild_id) - 1] = '\0';
   wc_utf8_copy(s_guild_name, guild_name ? guild_name : "", sizeof(s_guild_name));
+  // Track usage so the home page can sort by "most used" — fires each time the
+  // user opens this guild's channel list, even via "Show all servers".
+  wc_viewstats_bump_guild(s_guild_id);
   s_collapsed[0] = '\0';
   if (persist_exists(PK_COLLAPSED_CATS)) persist_read_string(PK_COLLAPSED_CATS, s_collapsed, sizeof(s_collapsed));
   s_was_hidden = false;
