@@ -1,22 +1,47 @@
-// src/c/server_list.c
+// src/c/server_list.c — v1.2 home page (Settings + DMs preview + Servers preview).
+// The full server list (with folder support) lives in `all_servers.c`, pushed
+// from the "Show all servers" row at the bottom of the Servers section. Same
+// pattern for DMs via `all_dms.c`.
 #include "server_list.h"
 #include "rows.h"
 #include "ui_util.h"
 #include "channel_list.h"
+#include "chat_view.h"
+#include "all_dms.h"
+#include "all_servers.h"
 #include "tutorial.h"
 
-#define OP_GUILDS 1
-#define PK_EXPANDED 200
+#define OP_HOME 7
+
+// Row kinds (first field from OP_HOME):
+//   S = Settings entry (single row, top of list)
+//   H = section header (DMs or Servers)
+//   D = DM row
+//   M = "Show all" row (followed by section id 'dm' or 'server')
+//   g = guild preview row
+typedef enum {
+  WC_HROW_SETTINGS = 0,
+  WC_HROW_HEADER,
+  WC_HROW_DM,
+  WC_HROW_SHOWALL,
+  WC_HROW_GUILD
+} WcHomeKind;
+
+typedef enum {
+  WC_SEC_NONE = 0,
+  WC_SEC_DM = 1,
+  WC_SEC_SERVER = 2
+} WcSection;
 
 typedef struct {
-  char kind;            // 'f' folder, 'g' guild
+  WcHomeKind kind;
   char id[20];
   char name[28];
   GColor color;
-  int parent;           // index into s_all of owning folder, or -1
-  GColor members[4];
-  int n_members;
-} SRow;
+  int  ping_count;
+  bool unread;
+  WcSection section;        // for H and M rows
+} HRow;
 
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR, ST_NOTOKEN } LoadState;
 
@@ -24,15 +49,12 @@ static Window *s_window;
 static MenuLayer *s_menu;
 static TextLayer *s_titlebar;
 static WristcordSettings *s_settings;
-static SRow s_all[WC_MAX_ROWS];
-static int s_all_count;
-static int s_visible[WC_MAX_ROWS];
-static int s_visible_count;
+static HRow s_rows[WC_MAX_ROWS];
+static int s_count;
 static LoadState s_state;
 static int s_err_code;
-static char s_expanded[256];
 
-// Animated loading screen (logo + cycling accent dots).
+// Animated loading screen
 static GBitmap  *s_logo;
 static AppTimer *s_anim;
 static int       s_anim_frame;
@@ -47,10 +69,8 @@ static void anim_cb(void *d) {
 }
 static void start_loading_anim(void) { s_anim_frame = 0; stop_loading_anim(); s_anim = app_timer_register(300, anim_cb, NULL); }
 
-// ── Help/Settings action menu ─────────────────────────────────────────────────
+// ── Help / Settings action menu (long-press anywhere) ────────────────────────
 static ActionMenuLevel *s_am_level;
-
-// Tiny "Settings info" window shown from Help/Settings → Settings
 static Window    *s_info_window;
 static TextLayer *s_info_text;
 
@@ -59,7 +79,6 @@ static void info_window_unload(Window *w) {
   text_layer_destroy(s_info_text); s_info_text = NULL;
   window_destroy(s_info_window);   s_info_window = NULL;
 }
-
 static void push_info_window(void) {
   if (s_info_window) { window_stack_push(s_info_window, true); return; }
   s_info_window = window_create();
@@ -72,228 +91,251 @@ static void push_info_window(void) {
   text_layer_set_font(s_info_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_info_text, GTextOverflowModeWordWrap);
   text_layer_set_text(s_info_text,
-    "Change your token, theme, accent, and refresh rate in the Wristcord settings in the Pebble phone app.");
+    "Change your token, theme, accent, refresh interval, and home-page counts in the Wristcord settings in the Pebble phone app.");
   layer_add_child(root, text_layer_get_layer(s_info_text));
   window_set_window_handlers(s_info_window, (WindowHandlers){ .unload = info_window_unload });
   window_stack_push(s_info_window, true);
 }
-
 static void am_help(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
   (void)m; (void)item; (void)ctx;
   tutorial_window_push(s_settings);
 }
-
 static void am_settings_info(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
   (void)m; (void)item; (void)ctx;
   push_info_window();
 }
-
 static void am_did_close(ActionMenu *m, const ActionMenuItem *performed, void *ctx) {
   (void)m; (void)performed; (void)ctx;
   if (s_am_level) { action_menu_hierarchy_destroy(s_am_level, NULL, NULL); s_am_level = NULL; }
 }
-
 static void open_help_menu(void) {
   s_am_level = action_menu_level_create(2);
   action_menu_level_add_action(s_am_level, "Help",     am_help,          NULL);
   action_menu_level_add_action(s_am_level, "Settings", am_settings_info, NULL);
   ActionMenuConfig config = (ActionMenuConfig){
     .root_level = s_am_level,
-    .colors = {
-      .background = s_settings->accent,
-      .foreground = GColorWhite,
-    },
-    .align    = ActionMenuAlignCenter,
+    .colors = { .background = s_settings->accent, .foreground = GColorWhite },
+    .align = ActionMenuAlignCenter,
     .did_close = am_did_close,
   };
   action_menu_open(&config);
 }
 
-static void rebuild_visible(void) {
-  s_visible_count = 0;
-  for (int i = 0; i < s_all_count; i++) {
-    SRow *r = &s_all[i];
-    bool show;
-    if (r->parent < 0) show = true;                                  // folders + top-level guilds
-    else show = wc_csv_contains(s_expanded, s_all[r->parent].id);       // child guild only if folder expanded
-    if (show) s_visible[s_visible_count++] = i;
-  }
-}
-
-// ---- rows callbacks ----
+// ── rows callbacks ────────────────────────────────────────────────────────────
 static void on_rows_done(WcRow *rows, int count) {
-  s_all_count = 0;
-  for (int i = 0; i < count && s_all_count < WC_MAX_ROWS; i++) {
+  s_count = 0;
+  for (int i = 0; i < count && s_count < WC_MAX_ROWS; i++) {
     WcRow *w = &rows[i];
-    if (w->n_fields < 5) continue;
-    SRow *r = &s_all[s_all_count];
-    r->kind = w->fields[0][0];
-    strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
-    wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
-    r->color = wc_hex_to_color(w->fields[3]);
-    const char *par = w->fields[4];
-    r->parent = (par && par[0]) ? wc_atoi(par) : -1;
-    if (r->parent >= s_all_count) r->parent = -1;   // guard: parent must precede child (no OOB on s_all)
-    r->n_members = 0;
-    if (w->n_fields >= 6 && w->fields[5][0]) {
-      // Parse the comma-joined hex list without strtok/strncpy (libc-free; see ui_util).
-      const char *p = w->fields[5];
-      while (*p && r->n_members < 4) {
-        r->members[r->n_members++] = wc_hex_to_color(p);   // stops at the comma
-        while (*p && *p != ',') p++;
-        if (*p == ',') p++; else break;
+    if (w->n_fields < 1) continue;
+    char k = w->fields[0][0];
+    HRow *r = &s_rows[s_count];
+    r->id[0] = '\0'; r->name[0] = '\0';
+    r->color = GColorWhite; r->ping_count = 0; r->unread = false;
+    r->section = WC_SEC_NONE;
+    if (k == 'S') {
+      r->kind = WC_HROW_SETTINGS;
+    } else if (k == 'H' && w->n_fields >= 3) {
+      r->kind = WC_HROW_HEADER;
+      wc_utf8_copy(r->name, w->fields[1], sizeof(r->name));
+      // icon code in fields[2]: 'dm' / 'server'
+      const char *ic = w->fields[2];
+      r->section = (ic[0] == 'd') ? WC_SEC_DM : WC_SEC_SERVER;
+    } else if (k == 'D' && w->n_fields >= 6) {
+      r->kind = WC_HROW_DM;
+      strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
+      wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
+      r->color = wc_hex_to_color(w->fields[3]);
+      r->ping_count = wc_atoi(w->fields[4]); if (r->ping_count < 0) r->ping_count = 0;
+      r->unread = (w->fields[5][0] == '1');
+    } else if (k == 'M' && w->n_fields >= 2) {
+      r->kind = WC_HROW_SHOWALL;
+      r->section = (w->fields[1][0] == 'd') ? WC_SEC_DM : WC_SEC_SERVER;
+    } else if (k == 'g' && w->n_fields >= 4) {
+      r->kind = WC_HROW_GUILD;
+      strncpy(r->id, w->fields[1], sizeof(r->id) - 1); r->id[sizeof(r->id) - 1] = '\0';
+      wc_utf8_copy(r->name, w->fields[2], sizeof(r->name));
+      r->color = wc_hex_to_color(w->fields[3]);
+      if (w->n_fields >= 7) r->ping_count = wc_atoi(w->fields[6]);
+      if (r->ping_count < 0) r->ping_count = 0;
+      if (w->n_fields >= 8) r->unread = (w->fields[7][0] == '1');
+    } else {
+      continue;
+    }
+    s_count++;
+  }
+  s_state = (s_count == 0) ? ST_EMPTY : ST_READY;
+  stop_loading_anim();
+  if (s_menu) {
+    menu_layer_reload_data(s_menu);
+    // Default focus: the first DM row (which is the first row after the DM section header).
+    int focus = -1;
+    for (int i = 0; i < s_count; i++) {
+      if (s_rows[i].kind == WC_HROW_DM) { focus = i; break; }
+    }
+    if (focus < 0) {
+      for (int i = 0; i < s_count; i++) {
+        if (s_rows[i].kind == WC_HROW_GUILD) { focus = i; break; }
       }
     }
-    s_all_count++;
+    if (focus < 0) focus = 0;
+    menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = focus }, MenuRowAlignCenter, false);
   }
-  s_state = (s_all_count == 0) ? ST_EMPTY : ST_READY;
-  stop_loading_anim();
-  rebuild_visible();
-  if (s_menu) menu_layer_reload_data(s_menu);
 }
 static void on_rows_err(int code) {
   stop_loading_anim();
   s_err_code = code; s_state = ST_ERROR;
   if (s_menu) menu_layer_reload_data(s_menu);
 }
-
 static void start_fetch(void) {
   s_state = ST_LOADING;
   start_loading_anim();
   if (s_menu) menu_layer_reload_data(s_menu);
-  wc_rows_fetch(OP_GUILDS, "", on_rows_done, on_rows_err);
+  wc_rows_fetch(OP_HOME, "", on_rows_done, on_rows_err);
 }
 
-// ---- menu callbacks ----
-// Row 0 is the "Settings / Help" entry; rows 1..N are servers (or the status cell).
-// The Settings row is always present so the tutorial is reachable from any state.
+// ── menu callbacks ────────────────────────────────────────────────────────────
 static uint16_t get_num_rows(MenuLayer *m, uint16_t section, void *ctx) {
   (void)m; (void)section; (void)ctx;
-  return 1 + (s_state == ST_READY ? (uint16_t)s_visible_count : 1);
+  return s_state == ST_READY ? (uint16_t)s_count : 1;
 }
 static int16_t get_cell_height(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   (void)m; (void)ctx;
-  if (ci->row == 0) return 28;                          // compact Settings row
-  if (s_state != ST_READY) return 184;                  // status cell — fits below the Settings row in the viewport
-  SRow *r = &s_all[s_visible[ci->row - 1]];
-  return r->kind == 'f' ? 30 : 42;
+  if (s_state != ST_READY) return 184;
+  HRow *r = &s_rows[ci->row];
+  switch (r->kind) {
+    case WC_HROW_SETTINGS: return 28;
+    case WC_HROW_HEADER:   return 24;
+    case WC_HROW_DM:       return 42;
+    case WC_HROW_SHOWALL:  return 28;
+    case WC_HROW_GUILD:    return 42;
+  }
+  return 30;
 }
-static void draw_status(GContext *ctx, const GRect b) {
-  GColor fg = wc_theme_fg(s_settings);
 
+static void draw_status(GContext *ctx, GRect b) {
+  GColor fg = wc_theme_fg(s_settings);
   if (s_state == ST_LOADING) {
     int cx = b.origin.x + b.size.w / 2;
-    bool show_logo = (s_logo && s_settings->theme != THEME_LIGHT);  // white logo invisible on light
-    int block_h = (show_logo ? 56 + 14 : 0) + 12 + 14 + 22;         // logo + gap + dots + gap + label
+    bool show_logo = (s_logo && s_settings->theme != THEME_LIGHT);
+    int block_h = (show_logo ? 56 + 14 : 0) + 12 + 14 + 22;
     int top = b.origin.y + (b.size.h - block_h) / 2;
     if (show_logo) {
       graphics_context_set_compositing_mode(ctx, GCompOpSet);
       graphics_draw_bitmap_in_rect(ctx, s_logo, GRect(cx - 28, top, 56, 56));
       top += 56 + 14;
     }
-    int gap = 16, dot_y = top + 6;                                  // 3 cycling dots
+    int gap = 16, dot_y = top + 6;
     for (int i = 0; i < 3; i++) {
       bool active = (i == (s_anim_frame % 3));
       graphics_context_set_fill_color(ctx, active ? s_settings->accent : wc_theme_muted(s_settings));
       graphics_fill_circle(ctx, GPoint(cx - gap + i * gap, dot_y), active ? 5 : 3);
     }
     graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, "Loading your servers\xe2\x80\xa6", fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + 6, dot_y + 12, b.size.w - 12, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+    graphics_draw_text(ctx, "Loading\xe2\x80\xa6", fonts_get_system_font(FONT_KEY_GOTHIC_18),
+      GRect(b.origin.x + 6, dot_y + 12, b.size.w - 12, 24),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     return;
   }
-
   const char *msg = (s_state == ST_NOTOKEN) ? "No token set.\nOpen Wristcord settings\nin the Pebble app." :
                     (s_state == ST_ERROR && s_err_code == 1) ? "Sign-in failed.\nCheck your token." :
                     (s_state == ST_ERROR && s_err_code == 2) ? "Rate limited.\nTry again soon." :
-                    (s_state == ST_ERROR) ? "Couldn't load servers." :
-                                            "No servers found.";
+                    (s_state == ST_ERROR) ? "Couldn't load home." :
+                                            "Nothing here yet.";
   graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, msg, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
     GRect(b.origin.x + 6, b.origin.y + 8, b.size.w - 12, b.size.h - 12),
     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
-// Compact top entry: a 3-bar "menu" icon + "Settings" label + right chevron.
-// Clicking opens the existing Help/Settings action menu (Tutorial + Settings info).
+
+// Settings entry (compact, top of list).
 static void draw_settings_row(GContext *ctx, GRect b, bool selected) {
-  GColor accent = s_settings->accent;
   GColor fg     = wc_theme_fg(s_settings);
   GColor muted  = wc_theme_muted(s_settings);
-  // Icon: 3 stacked horizontal bars at the left.
-  int ix = b.origin.x + 8;
-  int iy = b.origin.y + b.size.h / 2 - 5;
-  graphics_context_set_fill_color(ctx, selected ? GColorWhite : accent);
-  for (int i = 0; i < 3; i++) graphics_fill_rect(ctx, GRect(ix, iy + i * 4, 12, 2), 0, GCornerNone);
-  // Label.
+  wc_draw_section_icon(ctx, GRect(b.origin.x + 4, b.origin.y, 18, b.size.h),
+                       WC_ICON_SETTINGS, selected ? GColorWhite : s_settings->accent);
   graphics_context_set_text_color(ctx, selected ? GColorWhite : fg);
   graphics_draw_text(ctx, "Settings", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
     GRect(b.origin.x + 28, b.origin.y + 4, b.size.w - 28 - 18, 22),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  // Right chevron (action indicator).
   wc_draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), false, selected ? GColorWhite : muted);
-  // Subtle divider under the row to visually separate it from the server list.
-  if (!selected) {
-    graphics_context_set_stroke_color(ctx, muted);
-    graphics_draw_line(ctx, GPoint(b.origin.x + 4, b.origin.y + b.size.h - 1),
-                            GPoint(b.origin.x + b.size.w - 4, b.origin.y + b.size.h - 1));
-  }
 }
 
-static void draw_grid(GContext *ctx, GRect box, SRow *r) {
-  int d = 22, gap = 2, cell = (d - gap) / 2;
-  int x0 = box.origin.x, y0 = box.origin.y + (box.size.h - d) / 2;
-  for (int i = 0; i < 4; i++) {
-    GColor col = (i < r->n_members) ? r->members[i] : GColorLightGray;
-    int cx = x0 + (i % 2) * (cell + gap) + cell / 2;
-    int cy = y0 + (i / 2) * (cell + gap) + cell / 2;
-    graphics_context_set_fill_color(ctx, col);
-    graphics_fill_circle(ctx, GPoint(cx, cy), cell / 2);
-  }
+// Section header (24px row): small icon + label in muted color, with a thin
+// divider line above so the section visually starts here.
+static void draw_section_header(GContext *ctx, GRect b, HRow *r, bool selected) {
+  (void)selected;
+  GColor muted = wc_theme_muted(s_settings);
+  GColor accent = s_settings->accent;
+  graphics_context_set_stroke_color(ctx, muted);
+  graphics_draw_line(ctx, GPoint(b.origin.x + 4, b.origin.y),
+                          GPoint(b.origin.x + b.size.w - 4, b.origin.y));
+  WcSectionIcon ic = (r->section == WC_SEC_DM) ? WC_ICON_DM : WC_ICON_SERVERS;
+  wc_draw_section_icon(ctx, GRect(b.origin.x + 4, b.origin.y, 18, b.size.h), ic, accent);
+  graphics_context_set_text_color(ctx, muted);
+  graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+    GRect(b.origin.x + 26, b.origin.y + 4, b.size.w - 30, 18),
+    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
+
+static void draw_initials_row(GContext *ctx, GRect b, HRow *r, bool selected) {
+  GColor fg = selected ? GColorWhite : wc_theme_fg(s_settings);
+  char ini[8]; wc_make_initials(r->name, ini, sizeof(ini));
+  GPoint disc_c = GPoint(b.origin.x + 6 + 11, b.origin.y + b.size.h / 2);
+  wc_draw_dot(ctx, disc_c, 11, r->color, ini);
+  int badge_count = r->ping_count > 0 ? r->ping_count : (r->unread ? 1 : 0);
+  wc_draw_ping_marker(ctx, disc_c, 11, badge_count, s_settings);
+  graphics_context_set_text_color(ctx, fg);
+  graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
+    GRect(b.origin.x + 34, b.origin.y + 9, b.size.w - 38, 24),
+    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+static void draw_showall_row(GContext *ctx, GRect b, HRow *r, bool selected) {
+  GColor fg = selected ? GColorWhite : s_settings->accent;
+  const char *label = (r->section == WC_SEC_DM) ? "Show all DMs" : "Show all servers";
+  graphics_context_set_text_color(ctx, fg);
+  graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+    GRect(b.origin.x + 30, b.origin.y + 5, b.size.w - 40, 20),
+    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  wc_draw_chevron(ctx, GRect(b.size.w - 16, b.origin.y, 14, b.size.h), false, fg);
+}
+
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void *ctx2) {
   (void)ctx2;
   GRect b = layer_get_bounds(cell_layer);
   bool selected = menu_cell_layer_is_highlighted(cell_layer);
-  if (ci->row == 0) { draw_settings_row(ctx, b, selected); return; }
   if (s_state != ST_READY) {
-    // Status cell with no rows yet (loading / error / etc). MenuLayer paints it
-    // with the accent highlight when it's the selected cell, so repaint the theme
-    // bg first so the status art sits on a clean backdrop.
     graphics_context_set_fill_color(ctx, wc_theme_bg(s_settings));
     graphics_fill_rect(ctx, b, 0, GCornerNone);
     draw_status(ctx, b);
     return;
   }
-  SRow *r = &s_all[s_visible[ci->row - 1]];
-  GColor fg = selected ? GColorWhite : wc_theme_fg(s_settings);
-  if (r->kind == 'f') {
-    draw_grid(ctx, GRect(b.origin.x + 6, b.origin.y, 22, b.size.h), r);
-    graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-      GRect(b.origin.x + 34, b.origin.y + 4, b.size.w - 34 - 18, 22), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    wc_draw_chevron(ctx, GRect(b.size.w - 18, b.origin.y, 14, b.size.h), wc_csv_contains(s_expanded, r->id), fg);
-  } else {
-    int indent = (r->parent >= 0) ? 14 : 0;
-    char ini[8]; wc_make_initials(r->name, ini, sizeof(ini));
-    wc_draw_dot(ctx, GPoint(b.origin.x + 6 + indent + 11, b.origin.y + b.size.h / 2), 11, r->color, ini);
-    graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(b.origin.x + indent + 34, b.origin.y + 9, b.size.w - indent - 38, 24), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  HRow *r = &s_rows[ci->row];
+  switch (r->kind) {
+    case WC_HROW_SETTINGS: draw_settings_row(ctx, b, selected); break;
+    case WC_HROW_HEADER:   draw_section_header(ctx, b, r, selected); break;
+    case WC_HROW_DM:
+    case WC_HROW_GUILD:    draw_initials_row(ctx, b, r, selected); break;
+    case WC_HROW_SHOWALL:  draw_showall_row(ctx, b, r, selected); break;
   }
 }
+
 static void select_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
-  (void)ctx;
-  if (ci->row == 0) { open_help_menu(); return; }   // Settings row -> Help/Tutorial menu
-  if (s_state != ST_READY) return;
-  SRow *r = &s_all[s_visible[ci->row - 1]];
-  if (r->kind == 'f') {
-    if (wc_csv_contains(s_expanded, r->id)) wc_csv_remove(s_expanded, r->id);
-    else wc_csv_add(s_expanded, sizeof(s_expanded), r->id);
-    persist_write_string(PK_EXPANDED, s_expanded);
-    rebuild_visible();
-    menu_layer_reload_data(m);
-  } else {
-    channel_list_window_push(s_settings, r->id, r->name);
+  (void)m; (void)ctx;
+  if (s_state != ST_READY) {
+    if (s_state == ST_NOTOKEN || s_state == ST_ERROR) open_help_menu();
+    return;
+  }
+  HRow *r = &s_rows[ci->row];
+  switch (r->kind) {
+    case WC_HROW_SETTINGS: open_help_menu(); break;
+    case WC_HROW_HEADER:   break;                                            // not clickable
+    case WC_HROW_DM:       chat_view_window_push(s_settings, r->id, r->name); break;
+    case WC_HROW_GUILD:    channel_list_window_push(s_settings, r->id, r->name); break;
+    case WC_HROW_SHOWALL:
+      if (r->section == WC_SEC_DM) all_dms_window_push(s_settings);
+      else all_servers_window_push(s_settings);
+      break;
   }
 }
 
@@ -302,49 +344,66 @@ static void select_long_click(struct MenuLayer *m, MenuIndex *ci, void *ctx) {
   open_help_menu();
 }
 
-static const char *s_titlebar_text = "Wristcord";
-static bool s_tut_checked;
+// MenuLayer: skip past unselectable header rows when the user is scrolling.
+static void selection_will_change(struct MenuLayer *menu_layer, MenuIndex *new_index,
+                                  MenuIndex old_index, void *callback_context) {
+  (void)menu_layer; (void)callback_context;
+  if (s_state != ST_READY) return;
+  int want = new_index->row;
+  if (want < 0 || want >= s_count) return;
+  // Direction inferred from old vs new
+  int dir = (new_index->row > old_index.row) ? 1 : (new_index->row < old_index.row ? -1 : 1);
+  while (want >= 0 && want < s_count && s_rows[want].kind == WC_HROW_HEADER) {
+    want += dir;
+  }
+  if (want < 0) want = 0;
+  if (want >= s_count) want = s_count - 1;
+  new_index->row = want;
+}
 
+// Re-fetch on appear so the ACK + gateway updates land when the user returns
+// from a sub-window.
+static bool s_was_hidden;
+static void window_appear(Window *w) {
+  (void)w;
+  if (s_was_hidden && s_state == ST_READY && s_settings->has_token) {
+    // Silent refetch — keep current rows on screen during the request.
+    wc_rows_fetch(OP_HOME, "", on_rows_done, on_rows_err);
+  }
+  s_was_hidden = false;
+}
+static void window_disappear(Window *w) { (void)w; s_was_hidden = true; }
+
+static bool s_tut_checked;
 static void tut_timer_cb(void *data) {
   (void)data;
   if (!persist_exists(PK_TUTORIAL_DONE)) tutorial_window_push(s_settings);
 }
-
-static void window_appear(Window *w) {
-  (void)w;
-  if (!s_tut_checked) {
-    s_tut_checked = true;
-    // Defer the push: pushing a window *during* this appear transition leaves the
-    // new window's click handlers uninstalled (onboarding then can't be advanced).
-    if (!persist_exists(PK_TUTORIAL_DONE)) app_timer_register(350, tut_timer_cb, NULL);
-  }
-}
-
 static void window_load(Window *w) {
-  (void)w;
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-
   s_menu = menu_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, b.size.w, b.size.h - STATUS_BAR_LAYER_HEIGHT));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
-    .get_num_rows      = get_num_rows,
-    .get_cell_height   = get_cell_height,
-    .draw_row          = draw_row,
-    .select_click      = select_click,
+    .get_num_rows = get_num_rows,
+    .get_cell_height = get_cell_height,
+    .draw_row = draw_row,
+    .select_click = select_click,
     .select_long_click = select_long_click,
+    .selection_will_change = selection_will_change,
   });
   menu_layer_set_normal_colors(s_menu, wc_theme_bg(s_settings), wc_theme_fg(s_settings));
   menu_layer_set_highlight_colors(s_menu, s_settings->accent, GColorWhite);
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
-  s_titlebar = wc_titlebar_create(root, b, s_titlebar_text, s_settings);
+  s_titlebar = wc_titlebar_create(root, b, "Wristcord", s_settings);
   if (!s_logo) s_logo = gbitmap_create_with_resource(RESOURCE_ID_DISCORD_LOGO);
-  // Default selection on the first content row (a server / the loading cell), not
-  // the Settings row at index 0 — Settings sits above as a discoverable scroll-up.
-  menu_layer_set_selected_index(s_menu, (MenuIndex){ .section = 0, .row = 1 }, MenuRowAlignNone, false);
-
   if (s_settings->has_token) start_fetch();
   else { s_state = ST_NOTOKEN; menu_layer_reload_data(s_menu); }
+
+  if (!s_tut_checked) {
+    s_tut_checked = true;
+    if (!persist_exists(PK_TUTORIAL_DONE)) app_timer_register(350, tut_timer_cb, NULL);
+  }
 }
 static void window_unload(Window *w) {
   (void)w;
@@ -357,13 +416,13 @@ static void window_unload(Window *w) {
 void server_list_window_push(WristcordSettings *settings) {
   s_settings = settings;
   s_tut_checked = false;
-  s_expanded[0] = '\0';
-  if (persist_exists(PK_EXPANDED)) persist_read_string(PK_EXPANDED, s_expanded, sizeof(s_expanded));
+  s_was_hidden = false;
   s_window = window_create();
   window_set_background_color(s_window, wc_theme_bg(settings));
   window_set_window_handlers(s_window, (WindowHandlers){
-    .load   = window_load,
+    .load = window_load,
     .appear = window_appear,
+    .disappear = window_disappear,
     .unload = window_unload,
   });
   window_stack_push(s_window, true);
