@@ -17,6 +17,7 @@ typedef struct {
   char  text[140];
   char  id[20];
   bool  truncated;
+  bool  mentions_me;       // v1.2: this message @mentions the current user
 } Msg;
 
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR } LoadState;
@@ -106,6 +107,7 @@ static void on_rows_done(WcRow *rows, int count) {
     wc_utf8_copy(m->text, w->fields[3], sizeof(m->text));
     strncpy(m->id,     w->fields[4], sizeof(m->id)     - 1); m->id[sizeof(m->id) - 1] = '\0';
     m->truncated = (w->fields[5][0] == '1');
+    m->mentions_me = (w->n_fields >= 7) && (w->fields[6][0] == '1');
     s_count++;
   }
   s_state = (s_count == 0) ? ST_EMPTY : ST_READY;
@@ -225,15 +227,25 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
     return;
   }
   Msg *msg = &s_msgs[ci->row];
+  // v1.2: gold-ish background tint for messages that @mention me. Discord uses
+  // a warm yellow; Pebble's GColorChromeYellow is close enough to read on both
+  // dark and light themes.
+  bool selected = menu_cell_layer_is_highlighted(cell_layer);
+  if (msg->mentions_me && !selected) {
+    graphics_context_set_fill_color(ctx, GColorChromeYellow);
+    graphics_fill_rect(ctx, b, 0, GCornerNone);
+  }
   graphics_context_set_text_color(ctx, msg->color);
   graphics_draw_text(ctx, msg->author, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
     GRect(b.origin.x + 6, b.origin.y + 1, b.size.w - 58, 16),
     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  graphics_context_set_text_color(ctx, wc_theme_muted(s_settings));
+  GColor time_color = msg->mentions_me && !selected ? GColorBlack : wc_theme_muted(s_settings);
+  graphics_context_set_text_color(ctx, time_color);
   graphics_draw_text(ctx, msg->time, fonts_get_system_font(FONT_KEY_GOTHIC_14),
     GRect(b.size.w - 52, b.origin.y + 1, 46, 16),
     GTextOverflowModeFill, GTextAlignmentRight, NULL);
-  graphics_context_set_text_color(ctx, wc_theme_fg(s_settings));
+  GColor body_color = msg->mentions_me && !selected ? GColorBlack : wc_theme_fg(s_settings);
+  graphics_context_set_text_color(ctx, body_color);
   graphics_draw_text(ctx, msg->text, fonts_get_system_font(FONT_KEY_GOTHIC_18),
     GRect(b.origin.x + 6, b.origin.y + 18, b.size.w - 12, b.size.h - 18),
     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
