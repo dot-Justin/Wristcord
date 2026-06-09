@@ -28,3 +28,27 @@ test('empty response yields safe defaults', () => {
   assert.strictEqual(s.token, '');
   assert.strictEqual(s.theme, 'midnight');
 });
+
+// Regression: v1.2 added dmCount, serverCount, sortMode. The first cut of clay.js
+// only listed the v1.0 fields, so every Clay save silently reset all v1.2
+// fields to defaults. This test ensures every field from config/index.js
+// survives the unwrap → normalize round-trip.
+test('unwraps every v1.2 setting (dmCount, serverCount, sortMode)', () => {
+  const clayResponse = {
+    token: { value: 'tok' },
+    theme: { value: 'midnight' },
+    accent: { value: '0x5555FF' },
+    pollSeconds: { value: '10' },
+    dmCount: { value: 7 },
+    serverCount: { value: 12 },
+    sortMode: { value: 'alphabetical' }
+  };
+  const s = normalize(unwrap(clayResponse));
+  assert.strictEqual(s.dmCount, 7);
+  assert.strictEqual(s.serverCount, 12);
+  assert.strictEqual(s.sortMode, 'alphabetical');
+  const sub = watchSubset(s);
+  assert.strictEqual(sub.SET_DM_COUNT, 7);
+  assert.strictEqual(sub.SET_SERVER_COUNT, 12);
+  assert.strictEqual(sub.SET_SORT_MODE, 2);   // 'alphabetical' is index 2
+});
