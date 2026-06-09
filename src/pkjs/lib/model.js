@@ -398,15 +398,16 @@ function buildHomePage(opts) {
     var st = (typeof opts.guildStats === 'function') ?
              (opts.guildStats(g.id) || { unreadChannels: 0, mentionCount: 0 }) :
              { unreadChannels: 0, mentionCount: 0 };
-    var pingCount = st.mentionCount > 0 ? st.mentionCount : st.unreadChannels;
+    // Discord's server-icon badge shows mention count only — unread-without-
+    // mention shows nothing (channel-level dots in channel_list cover that).
     rows.push({
       kind: 'g',
       id: g.id,
       name: g.name,
       color: g.color,
-      memberColors: [],          // no folder dots in the preview row
-      pingCount: pingCount,
-      unread: st.unreadChannels > 0
+      memberColors: [],
+      pingCount: st.mentionCount | 0,
+      unread: st.unreadChannels > 0      // kept for potential future use; C currently ignores
     });
   }
   if (guildOnly.length > serverLimit) {

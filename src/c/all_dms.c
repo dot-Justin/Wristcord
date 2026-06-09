@@ -84,9 +84,9 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *ci, void
   char ini[8]; wc_make_initials(r->name, ini, sizeof(ini));
   GPoint disc_c = GPoint(b.origin.x + 6 + 11, b.origin.y + b.size.h / 2);
   wc_draw_dot(ctx, disc_c, 11, r->color, ini);
-  // Ping marker on bottom-right of the disc.
-  int badge_count = r->mention_count > 0 ? r->mention_count : (r->unread ? 1 : 0);
-  wc_draw_ping_marker(ctx, disc_c, 11, badge_count, s_settings);
+  // Ping marker on bottom-right of the disc — mention count only, matching
+  // Discord. Unread-without-mention shows up in chat_view, not here.
+  wc_draw_ping_marker(ctx, disc_c, 11, r->mention_count, s_settings);
   graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, r->name, fonts_get_system_font(FONT_KEY_GOTHIC_18),
     GRect(b.origin.x + 34, b.origin.y + 9, b.size.w - 38, 24),
