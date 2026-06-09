@@ -10,6 +10,7 @@
 #include "all_dms.h"
 #include "all_servers.h"
 #include "tutorial.h"
+#include "viewstats.h"
 
 #define OP_HOME 7
 
@@ -41,6 +42,10 @@ typedef struct {
   int  ping_count;
   bool unread;
   WcSection section;        // for H and M rows
+  // Sort criteria (guild rows only; ignored elsewhere)
+  char mostrecent[20];      // last_message_id across all channels in the guild
+  int  discord_pos;         // 0..n-1, Discord folder order
+  int  use_count;           // local persist counter from viewstats
 } HRow;
 
 typedef enum { ST_LOADING, ST_READY, ST_EMPTY, ST_ERROR, ST_NOTOKEN } LoadState;
@@ -73,8 +78,13 @@ static void anim_cb(void *d) {
 }
 static void start_loading_anim(void) { s_anim_frame = 0; stop_loading_anim(); s_anim = app_timer_register(300, anim_cb, NULL); }
 
+// Forward declarations so the action-menu callback (defined first) can refer
+// to the sort+trim function (defined later, near on_rows_done).
+static void apply_server_sort_and_trim(void);
+
 // ── Help / Settings action menu (long-press anywhere) ────────────────────────
 static ActionMenuLevel *s_am_level;
+static ActionMenuLevel *s_am_sort;
 static Window    *s_info_window;
 static TextLayer *s_info_text;
 
@@ -95,7 +105,7 @@ static void push_info_window(void) {
   text_layer_set_font(s_info_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_info_text, GTextOverflowModeWordWrap);
   text_layer_set_text(s_info_text,
-    "Change your token, theme, accent, refresh interval, and home-page counts in the Wristcord settings in the Pebble phone app.");
+    "Token, theme, accent, refresh interval, home-page counts, and other settings live in the Wristcord configuration page in the Pebble phone app.");
   layer_add_child(root, text_layer_get_layer(s_info_text));
   window_set_window_handlers(s_info_window, (WindowHandlers){ .unload = info_window_unload });
   window_stack_push(s_info_window, true);
@@ -108,13 +118,35 @@ static void am_settings_info(ActionMenu *m, const ActionMenuItem *item, void *ct
   (void)m; (void)item; (void)ctx;
   push_info_window();
 }
+// Sort-mode picker. Selecting a row persists the new mode and re-sorts the
+// current home page in place — no refetch needed.
+static void am_pick_sort(ActionMenu *m, const ActionMenuItem *item, void *ctx) {
+  (void)m; (void)ctx;
+  WcSortMode picked = (WcSortMode)(uintptr_t)action_menu_item_get_action_data(item);
+  s_settings->sort_mode = picked;
+  wc_settings_save(s_settings);
+  // Re-apply sort to whatever's on screen.
+  if (s_state == ST_READY) {
+    apply_server_sort_and_trim();
+    if (s_menu) menu_layer_reload_data(s_menu);
+  }
+}
 static void am_did_close(ActionMenu *m, const ActionMenuItem *performed, void *ctx) {
   (void)m; (void)performed; (void)ctx;
   if (s_am_level) { action_menu_hierarchy_destroy(s_am_level, NULL, NULL); s_am_level = NULL; }
+  s_am_sort = NULL;     // owned by s_am_level
 }
 static void open_help_menu(void) {
-  s_am_level = action_menu_level_create(2);
-  action_menu_level_add_action(s_am_level, "Help",     am_help,          NULL);
+  // Sub-level: sort-by picker.
+  s_am_sort = action_menu_level_create(4);
+  action_menu_level_add_action(s_am_sort, "Most used",      am_pick_sort, (void*)(uintptr_t)WC_SORT_MOST_USED);
+  action_menu_level_add_action(s_am_sort, "Discord order",  am_pick_sort, (void*)(uintptr_t)WC_SORT_DISCORD_ORDER);
+  action_menu_level_add_action(s_am_sort, "Alphabetical",   am_pick_sort, (void*)(uintptr_t)WC_SORT_ALPHABETICAL);
+  action_menu_level_add_action(s_am_sort, "Recent activity",am_pick_sort, (void*)(uintptr_t)WC_SORT_RECENT_ACTIVITY);
+  // Root level: 3 actions, top-level Settings → Sort by → submenu.
+  s_am_level = action_menu_level_create(3);
+  action_menu_level_add_action(s_am_level, "Help", am_help, NULL);
+  action_menu_level_add_child(s_am_level, s_am_sort, "Sort servers");
   action_menu_level_add_action(s_am_level, "Settings", am_settings_info, NULL);
   ActionMenuConfig config = (ActionMenuConfig){
     .root_level = s_am_level,
@@ -123,6 +155,84 @@ static void open_help_menu(void) {
     .did_close = am_did_close,
   };
   action_menu_open(&config);
+}
+
+// ── server sort + trim ────────────────────────────────────────────────────────
+// Returns negative if a should sort before b, positive otherwise.
+static int compare_guilds(const HRow *a, const HRow *b, WcSortMode mode) {
+  switch (mode) {
+    case WC_SORT_MOST_USED: {
+      if (a->use_count != b->use_count) return b->use_count - a->use_count;
+      // Tiebreak: most recent activity, then Discord order
+      int la = (int)strlen(a->mostrecent), lb = (int)strlen(b->mostrecent);
+      if (la != lb) return lb - la;
+      int c = strcmp(b->mostrecent, a->mostrecent);
+      if (c != 0) return c;
+      return a->discord_pos - b->discord_pos;
+    }
+    case WC_SORT_DISCORD_ORDER:
+      return a->discord_pos - b->discord_pos;
+    case WC_SORT_ALPHABETICAL: {
+      // Case-insensitive ASCII compare, skipping a leading non-alphanumeric
+      // prefix (a lot of users name servers ". something" or "! priority" to
+      // float them; alphabetical sort should ignore that decoration).
+      const char *pa = a->name, *pb = b->name;
+      while (*pa && !((*pa >= 'A' && *pa <= 'Z') || (*pa >= 'a' && *pa <= 'z') ||
+                      (*pa >= '0' && *pa <= '9'))) pa++;
+      while (*pb && !((*pb >= 'A' && *pb <= 'Z') || (*pb >= 'a' && *pb <= 'z') ||
+                      (*pb >= '0' && *pb <= '9'))) pb++;
+      while (*pa && *pb) {
+        char ca = *pa, cb = *pb;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return (int)(unsigned char)ca - (int)(unsigned char)cb;
+        pa++; pb++;
+      }
+      return (int)(unsigned char)*pa - (int)(unsigned char)*pb;
+    }
+    case WC_SORT_RECENT_ACTIVITY: {
+      int la = (int)strlen(a->mostrecent), lb = (int)strlen(b->mostrecent);
+      if (la != lb) return lb - la;
+      return strcmp(b->mostrecent, a->mostrecent);
+    }
+  }
+  return a->discord_pos - b->discord_pos;
+}
+
+// In-place insertion sort restricted to the contiguous guild rows. We don't
+// touch Settings / headers / DMs / Show-all rows — only WC_HROW_GUILD entries
+// are reordered, and only within the range they already occupy.
+static void apply_server_sort_and_trim(void) {
+  int start = -1, end = -1;
+  for (int i = 0; i < s_count; i++) {
+    if (s_rows[i].kind == WC_HROW_GUILD) {
+      if (start < 0) start = i;
+      end = i;
+    }
+  }
+  if (start < 0) return;
+  int n = end - start + 1;
+  // Insertion sort — n is at most ~70, plenty fast.
+  for (int i = start + 1; i <= end; i++) {
+    HRow key = s_rows[i];
+    int j = i - 1;
+    while (j >= start && compare_guilds(&s_rows[j], &key, s_settings->sort_mode) > 0) {
+      s_rows[j + 1] = s_rows[j];
+      j--;
+    }
+    s_rows[j + 1] = key;
+  }
+  // Trim to server_count by deleting the surplus 'g' rows. Anything past the
+  // preview window is reachable via "Show all servers".
+  int keep = s_settings->server_count;
+  if (n > keep) {
+    int drop = n - keep;
+    // Shift everything after the kept-range backward over the surplus.
+    for (int i = start + keep; i + drop <= s_count - 1; i++) {
+      s_rows[i] = s_rows[i + drop];
+    }
+    s_count -= drop;
+  }
 }
 
 // ── rows callbacks ────────────────────────────────────────────────────────────
@@ -162,11 +272,22 @@ static void on_rows_done(WcRow *rows, int count) {
       if (w->n_fields >= 7) r->ping_count = wc_atoi(w->fields[6]);
       if (r->ping_count < 0) r->ping_count = 0;
       if (w->n_fields >= 8) r->unread = (w->fields[7][0] == '1');
+      r->mostrecent[0] = '\0';
+      if (w->n_fields >= 9 && w->fields[8][0]) {
+        strncpy(r->mostrecent, w->fields[8], sizeof(r->mostrecent) - 1);
+        r->mostrecent[sizeof(r->mostrecent) - 1] = '\0';
+      }
+      r->discord_pos = (w->n_fields >= 10) ? wc_atoi(w->fields[9]) : 0;
+      r->use_count = wc_viewstats_guild(r->id);
     } else {
       continue;
     }
     s_count++;
   }
+  // Sort + trim the guild block by the user's preference. The pkjs side sends
+  // ALL guilds in Discord order; we re-arrange them per sort_mode and keep only
+  // the top server_count, since this is the home page preview slice.
+  apply_server_sort_and_trim();
   s_state = (s_count == 0) ? ST_EMPTY : ST_READY;
   stop_loading_anim();
   if (s_menu) {

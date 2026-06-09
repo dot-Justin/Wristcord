@@ -9,6 +9,9 @@ function makeClient(request) {
     guilds: function () { return request('GET', '/users/@me/guilds'); },
     userSettings: function () { return request('GET', '/users/@me/settings'); },
     channels: function (guildId) { return request('GET', '/guilds/' + guildId + '/channels'); },
+    // 1:1 and group DM channels. Each entry has type, recipients[] (with full
+    // user objects inline), last_message_id, name (for group DMs), etc.
+    dmChannels: function () { return request('GET', '/users/@me/channels'); },
     messages: function (channelId, limit) {
       return request('GET', '/channels/' + channelId + '/messages?limit=' + (limit || 20));
     },
