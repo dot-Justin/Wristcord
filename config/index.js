@@ -27,6 +27,16 @@ module.exports = [
   { "type": "slider", "id": "g_dm_count", "messageKey": "dmCount",
     "label": "DMs on home page", "defaultValue": 3, "min": 3, "max": 20, "step": 1, "description": "How many recent DMs to preview before the 'Show all' row." },
   { "type": "slider", "id": "g_server_count", "messageKey": "serverCount",
-    "label": "Servers on home page", "defaultValue": 3, "min": 3, "max": 20, "step": 1, "description": "How many most-active servers to preview before the 'Show all' row." },
+    "label": "Servers on home page", "defaultValue": 3, "min": 3, "max": 20, "step": 1, "description": "How many servers to preview before the 'Show all' row." },
+  { "type": "select", "id": "g_sort_mode", "messageKey": "sortMode",
+    "label": "Sort servers + DMs", "defaultValue": "mostUsed",
+    "description": "How the home-page previews are ordered. 'Most used' tracks how often you open each server/DM on this watch.",
+    "options": [
+      { "label": "Most used (recommended)", "value": "mostUsed" },
+      { "label": "Discord order",           "value": "discordOrder" },
+      { "label": "Alphabetical",            "value": "alphabetical" },
+      { "label": "Most recent activity",    "value": "recentActivity" }
+    ]
+  },
   { "type": "submit", "defaultValue": "Save" }
 ];

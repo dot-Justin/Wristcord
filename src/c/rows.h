@@ -3,7 +3,7 @@
 #include <pebble.h>
 
 #define WC_MAX_ROWS 128
-#define WC_MAX_FIELDS 7
+#define WC_MAX_FIELDS 10
 #define WC_ROWS_BUF 4096
 
 typedef struct { const char *fields[WC_MAX_FIELDS]; int n_fields; } WcRow;

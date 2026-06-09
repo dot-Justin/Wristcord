@@ -7,15 +7,21 @@
 #define PK_HASTOK 103
 #define PK_DMCNT  104   // v1.2
 #define PK_SRVCNT 105   // v1.2
+#define PK_SORT   106   // v1.2: sort mode
 
 #define DEFAULT_ACCENT_HEX 0x5555FF
 #define DEFAULT_DM_COUNT 3
 #define DEFAULT_SERVER_COUNT 3
+#define DEFAULT_SORT_MODE WC_SORT_MOST_USED
 
 static int32_t clamp_count(int32_t v) {
   if (v < 3) return 3;
   if (v > 20) return 20;
   return v;
+}
+static WcSortMode clamp_sort(int32_t v) {
+  if (v < 0 || v > WC_SORT_RECENT_ACTIVITY) return DEFAULT_SORT_MODE;
+  return (WcSortMode)v;
 }
 
 void wc_settings_load(WristcordSettings *out) {
@@ -26,6 +32,7 @@ void wc_settings_load(WristcordSettings *out) {
   out->has_token    = persist_exists(PK_HASTOK) ? (bool)persist_read_int(PK_HASTOK) : false;
   out->dm_count     = clamp_count(persist_exists(PK_DMCNT)  ? persist_read_int(PK_DMCNT)  : DEFAULT_DM_COUNT);
   out->server_count = clamp_count(persist_exists(PK_SRVCNT) ? persist_read_int(PK_SRVCNT) : DEFAULT_SERVER_COUNT);
+  out->sort_mode    = clamp_sort(persist_exists(PK_SORT) ? persist_read_int(PK_SORT) : DEFAULT_SORT_MODE);
 }
 
 void wc_settings_save(const WristcordSettings *s) {
@@ -35,6 +42,7 @@ void wc_settings_save(const WristcordSettings *s) {
   persist_write_int(PK_HASTOK, s->has_token ? 1 : 0);
   persist_write_int(PK_DMCNT, s->dm_count);
   persist_write_int(PK_SRVCNT, s->server_count);
+  persist_write_int(PK_SORT, (int32_t)s->sort_mode);
 }
 
 bool wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
@@ -50,6 +58,7 @@ bool wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
   if ((t = dict_find(it, MESSAGE_KEY_HAS_TOKEN)))  { s->has_token = (t->value->int32 != 0); changed = true; }
   if ((t = dict_find(it, MESSAGE_KEY_SET_DM_COUNT)))     { s->dm_count = clamp_count(t->value->int32); changed = true; }
   if ((t = dict_find(it, MESSAGE_KEY_SET_SERVER_COUNT))) { s->server_count = clamp_count(t->value->int32); changed = true; }
+  if ((t = dict_find(it, MESSAGE_KEY_SET_SORT_MODE)))    { s->sort_mode = clamp_sort(t->value->int32); changed = true; }
   return changed;
 }
 
