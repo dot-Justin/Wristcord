@@ -84,6 +84,7 @@ function makeXhrRequest(getToken) {
 
 // ---- OP router with a simple page cache ----
 var OP_GUILDS = 1, OP_CHANNELS = 2, OP_MESSAGES = 3, OP_SEND = 4, OP_MSG_FULL = 5, OP_ACK = 6;
+var OP_HOME = 7, OP_DMS_ALL = 8;
 var MAX_ROWS_LEN = 1400;   // bytes of ROWS per batch (C inbox is 2048)
 var cacheKey = null, cacheBatches = [];
 var lastFullById = {};
@@ -139,11 +140,49 @@ function buildRecords(op, id) {
   if (op === OP_MESSAGES) {
     return client.messages(id, 20).then(function (m) {
       if (m.status !== 200) return { err: mapStatusErr(m.status) };
-      var rows = model.packMessages(m.json);
+      var rows = model.packMessages(m.json, gateway.getMyUserId());
       lastFullById = {};
       rows.forEach(function (r) { lastFullById[r.id] = r.full; });
-      return { records: rows.map(function (r) { return [r.author, r.color, r.time, r.text, r.id, r.truncated ? '1' : '0']; }) };
+      // 7-field message row: [author, color, time, text, id, truncated, mentionsMe]
+      return { records: rows.map(function (r) {
+        return [r.author, r.color, r.time, r.text, r.id,
+                r.truncated ? '1' : '0', r.mentionsMe ? '1' : '0'];
+      }) };
     });
+  }
+  if (op === OP_HOME) {
+    // OP_HOME payload comes pre-joined from the gateway (DMs, guild stats).
+    // The watch sends desired limits in p.PAGE high bits or separate keys; for
+    // now read them from a small inline structured payload. The router below
+    // passes opts.dmLimit/serverLimit; here we use defaults synced from settings.
+    var stng = loadSettings();
+    var dmLimit = clampLimit(stng.dmCount, 3, 20);
+    var serverLimit = clampLimit(stng.serverCount, 3, 20);
+    return client.guilds().then(function (g) {
+      if (g.status !== 200) return { err: mapStatusErr(g.status) };
+      return client.userSettings().then(function (s) {
+        var us = (s.status === 200 ? s.json : {}) || {};
+        var dms = (gateway.getState() === 'READY') ? gateway.getAllDMs() : [];
+        var rows = model.buildHomePage({
+          dms: dms,
+          guilds: g.json,
+          userSettings: us,
+          guildStats: gateway.getGuildStats,
+          dmLimit: dmLimit,
+          serverLimit: serverLimit
+        });
+        return { records: encodeHomeRows(rows) };
+      });
+    });
+  }
+  if (op === OP_DMS_ALL) {
+    var dmsAll = (gateway.getState() === 'READY') ? gateway.getAllDMs() : [];
+    return Promise.resolve({ records: dmsAll.map(function (dm) {
+      return ['D', dm.id, dm.name || '(unknown)',
+              require('./lib/color').nameToAccentHex(dm.name || dm.recipientId || dm.id),
+              String(dm.mentionCount | 0),
+              dm.unread ? '1' : '0'];
+    }) });
   }
   if (op === OP_MSG_FULL) {
     var fullText = lastFullById[id] || '(message unavailable)';
@@ -151,6 +190,28 @@ function buildRecords(op, id) {
     return Promise.resolve({ records: chunks });
   }
   return Promise.resolve({ records: [] });
+}
+
+// Serialize the heterogeneous buildHomePage row shapes into ROWS records.
+function encodeHomeRows(rows) {
+  return rows.map(function (r) {
+    if (r.kind === 'S') return ['S'];
+    if (r.kind === 'H') return ['H', r.label || '', r.icon || ''];
+    if (r.kind === 'D') return ['D', r.id, r.name || '', r.color || '',
+                                String(r.mentionCount | 0), r.unread ? '1' : '0'];
+    if (r.kind === 'M') return ['M', r.section || ''];
+    if (r.kind === 'g') return ['g', r.id, r.name || '', r.color || '', '',
+                                (r.memberColors || []).join(','),
+                                String(r.pingCount | 0), r.unread ? '1' : '0'];
+    return ['?'];
+  });
+}
+
+function clampLimit(n, lo, hi) {
+  n = (n | 0);
+  if (!n || n < lo) return lo;
+  if (n > hi) return hi;
+  return n;
 }
 
 function sendPage(op, page) {

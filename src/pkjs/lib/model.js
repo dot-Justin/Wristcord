@@ -267,9 +267,10 @@ function attachmentTag(msg) {
   return '';
 }
 
-function packMessages(messages) {
+function packMessages(messages, myUserId) {
   // Discord returns newest-first; reverse to oldest-first
   var ordered = messages.slice().reverse();
+  var me = myUserId ? String(myUserId) : '';
 
   return ordered.map(function(msg) {
     var author = msg.author.global_name || msg.author.username;
@@ -306,8 +307,120 @@ function packMessages(messages) {
       truncated = false;
     }
 
-    return { author: author, color: msgColor, time: time, text: text, id: String(msg.id), full: full, truncated: truncated };
+    // v1.2: does this message @mention me? Used by the C side to draw a goldish
+    // background tint on the cell.
+    var mentionsMe = false;
+    if (me) {
+      var mentions = msg.mentions || [];
+      for (var mi = 0; mi < mentions.length; mi++) {
+        if (mentions[mi] && String(mentions[mi].id) === me) { mentionsMe = true; break; }
+      }
+    }
+
+    return { author: author, color: msgColor, time: time, text: text,
+             id: String(msg.id), full: full, truncated: truncated,
+             mentionsMe: mentionsMe };
   });
+}
+
+/**
+ * buildHomePage(opts) -> flat row array for the home page.
+ *
+ * opts = {
+ *   dms,             // array of {id, type, name, lastMessageId, mentionCount, unread, recipientId}
+ *   guilds,          // raw Discord /users/@me/guilds response
+ *   userSettings,    // /users/@me/settings response (for folder data)
+ *   guildStats,      // fn(guildId) -> {unreadChannels, mentionCount, mostRecentMessageId}
+ *   dmLimit,         // int 3..20
+ *   serverLimit      // int 3..20
+ * }
+ *
+ * Row kinds (first field):
+ *   S = settings entry (alone, no other fields)
+ *   H = section header — fields[1] = label, fields[2] = icon code ('dm'|'server')
+ *   D = DM row — fields[1]=id, [2]=name, [3]=color, [4]=mentionCount, [5]=unreadBool
+ *   M = "Show all" row — fields[1]=section id ('dm'|'server')
+ *   g = guild preview row — same as buildServerList guild row, with extras:
+ *       fields[1]=id, [2]=name, [3]=color, [4]='' (no parent), [5]=memberColorsCsv,
+ *       [6]=pingCount, [7]=unreadBool
+ */
+function buildHomePage(opts) {
+  opts = opts || {};
+  var dmLimit = clampLimit(opts.dmLimit, 3, 20);
+  var serverLimit = clampLimit(opts.serverLimit, 3, 20);
+  var rows = [];
+
+  // Settings entry
+  rows.push({ kind: 'S' });
+
+  // ---- DM section ----
+  rows.push({ kind: 'H', label: 'Direct Messages', icon: 'dm' });
+  var dms = opts.dms || [];
+  var dmShown = Math.min(dmLimit, dms.length);
+  for (var i = 0; i < dmShown; i++) {
+    var dm = dms[i];
+    rows.push({
+      kind: 'D',
+      id: dm.id,
+      name: dm.name,
+      color: nameToAccentHex(dm.name || dm.recipientId || dm.id),
+      mentionCount: dm.mentionCount | 0,
+      unread: !!dm.unread
+    });
+  }
+  if (dms.length > dmLimit) {
+    rows.push({ kind: 'M', section: 'dm' });
+  }
+
+  // ---- Server section ----
+  rows.push({ kind: 'H', label: 'Servers', icon: 'server' });
+  // Use buildServerList for sort + folder structure, then keep only top N
+  // guilds AT THE TOP LEVEL (no folders inline in the preview — preview is a
+  // flat "most-recent N" list).
+  var serverRows = buildServerList(opts.guilds || [], opts.userSettings || {});
+  // Strip folder rows: we only want guilds, sorted by most-recent message
+  // across their channels (from gateway). Fall back to original order for
+  // guilds we have no stats for.
+  var guildOnly = serverRows.filter(function (r) { return r.kind === 'g'; });
+  if (typeof opts.guildStats === 'function') {
+    guildOnly.sort(function (a, b) {
+      var sa = opts.guildStats(a.id) || { mostRecentMessageId: '0' };
+      var sb = opts.guildStats(b.id) || { mostRecentMessageId: '0' };
+      var la = sa.mostRecentMessageId || '0';
+      var lb = sb.mostRecentMessageId || '0';
+      if (la.length !== lb.length) return lb.length - la.length;
+      return la < lb ? 1 : (la > lb ? -1 : 0);
+    });
+  }
+  var srvShown = Math.min(serverLimit, guildOnly.length);
+  for (var j = 0; j < srvShown; j++) {
+    var g = guildOnly[j];
+    var st = (typeof opts.guildStats === 'function') ?
+             (opts.guildStats(g.id) || { unreadChannels: 0, mentionCount: 0 }) :
+             { unreadChannels: 0, mentionCount: 0 };
+    var pingCount = st.mentionCount > 0 ? st.mentionCount : st.unreadChannels;
+    rows.push({
+      kind: 'g',
+      id: g.id,
+      name: g.name,
+      color: g.color,
+      memberColors: [],          // no folder dots in the preview row
+      pingCount: pingCount,
+      unread: st.unreadChannels > 0
+    });
+  }
+  if (guildOnly.length > serverLimit) {
+    rows.push({ kind: 'M', section: 'server' });
+  }
+
+  return rows;
+}
+
+function clampLimit(n, lo, hi) {
+  n = (n | 0);
+  if (!n || n < lo) return lo;
+  if (n > hi) return hi;
+  return n;
 }
 
 module.exports = {
@@ -315,4 +428,5 @@ module.exports = {
   buildChannelTree: buildChannelTree,
   packMessages: packMessages,
   cleanText: cleanText,
+  buildHomePage: buildHomePage
 };

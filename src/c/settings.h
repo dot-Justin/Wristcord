@@ -10,6 +10,8 @@ typedef struct {
   GColor   accent;       // derived from accent_hex via GColorFromHEX
   int32_t  poll_seconds; // 0 = off
   bool     has_token;    // whether a token is configured on the phone
+  int32_t  dm_count;     // v1.2: how many DMs to preview on the home page (3-20)
+  int32_t  server_count; // v1.2: how many servers to preview on the home page (3-20)
 } WristcordSettings;
 
 void wc_settings_load(WristcordSettings *out);                 // from persist, with defaults

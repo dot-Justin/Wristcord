@@ -5,8 +5,18 @@
 #define PK_ACCENT 101   // stores the raw 0xRRGGBB hex int
 #define PK_POLL   102
 #define PK_HASTOK 103
+#define PK_DMCNT  104   // v1.2
+#define PK_SRVCNT 105   // v1.2
 
 #define DEFAULT_ACCENT_HEX 0x5555FF
+#define DEFAULT_DM_COUNT 3
+#define DEFAULT_SERVER_COUNT 3
+
+static int32_t clamp_count(int32_t v) {
+  if (v < 3) return 3;
+  if (v > 20) return 20;
+  return v;
+}
 
 void wc_settings_load(WristcordSettings *out) {
   out->theme        = persist_exists(PK_THEME)  ? (WcTheme)persist_read_int(PK_THEME) : THEME_MIDNIGHT;
@@ -14,6 +24,8 @@ void wc_settings_load(WristcordSettings *out) {
   out->accent       = GColorFromHEX(out->accent_hex);
   out->poll_seconds = persist_exists(PK_POLL)   ? persist_read_int(PK_POLL) : 10;
   out->has_token    = persist_exists(PK_HASTOK) ? (bool)persist_read_int(PK_HASTOK) : false;
+  out->dm_count     = clamp_count(persist_exists(PK_DMCNT)  ? persist_read_int(PK_DMCNT)  : DEFAULT_DM_COUNT);
+  out->server_count = clamp_count(persist_exists(PK_SRVCNT) ? persist_read_int(PK_SRVCNT) : DEFAULT_SERVER_COUNT);
 }
 
 void wc_settings_save(const WristcordSettings *s) {
@@ -21,6 +33,8 @@ void wc_settings_save(const WristcordSettings *s) {
   persist_write_int(PK_ACCENT, (int32_t)s->accent_hex);
   persist_write_int(PK_POLL, s->poll_seconds);
   persist_write_int(PK_HASTOK, s->has_token ? 1 : 0);
+  persist_write_int(PK_DMCNT, s->dm_count);
+  persist_write_int(PK_SRVCNT, s->server_count);
 }
 
 bool wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
@@ -34,6 +48,8 @@ bool wc_settings_apply_from_msg(DictionaryIterator *it, WristcordSettings *s) {
   }
   if ((t = dict_find(it, MESSAGE_KEY_SET_POLL)))   { s->poll_seconds = t->value->int32; changed = true; }
   if ((t = dict_find(it, MESSAGE_KEY_HAS_TOKEN)))  { s->has_token = (t->value->int32 != 0); changed = true; }
+  if ((t = dict_find(it, MESSAGE_KEY_SET_DM_COUNT)))     { s->dm_count = clamp_count(t->value->int32); changed = true; }
+  if ((t = dict_find(it, MESSAGE_KEY_SET_SERVER_COUNT))) { s->server_count = clamp_count(t->value->int32); changed = true; }
   return changed;
 }
 
