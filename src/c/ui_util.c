@@ -178,6 +178,63 @@ void wc_draw_mention_badge(GContext *ctx, GRect box, int mention_count) {
     GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
+void wc_draw_ping_marker(GContext *ctx, GPoint disc_center, int disc_radius,
+                         int count, WristcordSettings *settings) {
+  if (count <= 0) return;
+  // Marker sits on the bottom-right corner of the disc — Discord positions it
+  // roughly at 70% along each axis from the disc's center.
+  int off = (int)(disc_radius * 0.7);
+  GPoint center = GPoint(disc_center.x + off, disc_center.y + off);
+  int outer_r = 9;                                       // outer ring matches disc bg
+  int inner_r = 7;                                       // red badge inside
+  // Background-colored ring: cheaper than stroke math; just fill a slightly
+  // bigger disc with the screen bg so the red badge looks outlined.
+  graphics_context_set_fill_color(ctx, wc_theme_bg(settings));
+  graphics_fill_circle(ctx, center, outer_r);
+  graphics_context_set_fill_color(ctx, GColorRed);
+  graphics_fill_circle(ctx, center, inner_r);
+  char buf[4];
+  if (count > 9) { buf[0] = '9'; buf[1] = '+'; buf[2] = '\0'; }
+  else { buf[0] = '0' + count; buf[1] = '\0'; }
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+    GRect(center.x - inner_r, center.y - 9, inner_r * 2, 16),
+    GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+}
+
+void wc_draw_section_icon(GContext *ctx, GRect box, WcSectionIcon kind, GColor color) {
+  int cx = box.origin.x + box.size.w / 2;
+  int cy = box.origin.y + box.size.h / 2;
+  graphics_context_set_fill_color(ctx, color);
+  graphics_context_set_stroke_color(ctx, color);
+  if (kind == WC_ICON_SETTINGS) {
+    // Three short stacked horizontal bars (a "menu" hamburger that doubles
+    // semantically as 'config' here). Compact, ~14×10.
+    for (int i = 0; i < 3; i++) {
+      graphics_fill_rect(ctx, GRect(cx - 6, cy - 5 + i * 5, 12, 2), 0, GCornerNone);
+    }
+  } else if (kind == WC_ICON_DM) {
+    // Speech bubble: rounded body + a tail in the bottom-left.
+    graphics_fill_rect(ctx, GRect(cx - 7, cy - 6, 14, 10), 2, GCornersAll);
+    // Tail (small triangle pointing down-left).
+    GPathInfo info = { .num_points = 3, .points = (GPoint[]){
+      GPoint(cx - 5, cy + 4),
+      GPoint(cx - 1, cy + 4),
+      GPoint(cx - 5, cy + 7)
+    }};
+    GPath *tail = gpath_create(&info);
+    gpath_draw_filled(ctx, tail);
+    gpath_destroy(tail);
+  } else if (kind == WC_ICON_SERVERS) {
+    // 3×3 grid of small filled dots (~13×13).
+    for (int row = 0; row < 3; row++) {
+      for (int col = 0; col < 3; col++) {
+        graphics_fill_rect(ctx, GRect(cx - 6 + col * 5, cy - 6 + row * 5, 3, 3), 0, GCornerNone);
+      }
+    }
+  }
+}
+
 void wc_draw_chevron(GContext *ctx, GRect box, bool expanded, GColor color) {
   // Drawn triangle (font-independent; ▸/▾ glyphs aren't in the system font).
   int cx = box.origin.x + box.size.w / 2;

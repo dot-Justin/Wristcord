@@ -27,6 +27,22 @@ void   wc_draw_unread_dot(GContext *ctx, GPoint center, bool selected,
 // Counts > 99 clamp to "99" (no "+" — the circle isn't wide enough for 3 chars).
 void   wc_draw_mention_badge(GContext *ctx, GRect box, int mention_count);
 
+// v1.2: Discord-style guild ping marker — small red badge overlaid on the
+// bottom-right of a server's initials disc. `disc_center` + `disc_radius` are
+// the disc the marker overlays; the marker gets a background-colored ring so
+// it visually separates from the disc behind it. count == 0 draws nothing;
+// >9 renders "9+". Use this for both servers AND DM rows.
+void   wc_draw_ping_marker(GContext *ctx, GPoint disc_center, int disc_radius,
+                           int count, WristcordSettings *settings);
+
+// v1.2: hand-drawn section icons for the home page header rows.
+typedef enum {
+  WC_ICON_SETTINGS = 0,
+  WC_ICON_DM = 1,
+  WC_ICON_SERVERS = 2
+} WcSectionIcon;
+void   wc_draw_section_icon(GContext *ctx, GRect box, WcSectionIcon kind, GColor color);
+
 // Create a 20px themed title bar (surface bg + bold title) at the top of `root`.
 // Returns the TextLayer; caller destroys it on unload. `title` must remain valid
 // for the lifetime of the layer (static/const string or persistent static buffer).
