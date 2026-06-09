@@ -55,6 +55,27 @@ function create(opts) {
   // Read-state map: channelId -> { lastReadId, mentionCount }
   var readMap = {};
 
+  // Guild summary index: guildId -> [{channelId, lastMessageId}]
+  // Populated from READY.d.guilds[*].channels[*]. Lets getGuildStats() compute
+  // per-server ping aggregates without any extra REST calls.
+  var guildIndex = {};
+
+  // DM/group-DM channel map: channelId -> {
+  //   id, type, name, lastMessageId, recipientName, recipientId
+  // }. Populated from READY.d.private_channels and refreshed on
+  // CHANNEL_CREATE/UPDATE.
+  var dmMap = {};
+
+  // User cache: userId -> {global_name, username}. Populated from READY.d.users
+  // which is where Discord parks partial user objects referenced by
+  // private_channels' recipient_ids field. Without this map DM names come back
+  // blank because the READY payload doesn't inline recipients.
+  var userMap = {};
+
+  // My Discord user id, captured from READY.d.user.id at IDENTIFY time so
+  // chat_view can detect "this message mentions me".
+  var myUserId = null;
+
   var state = 'DISCONNECTED';
   var ws = null;
   var seq = null;
@@ -152,6 +173,116 @@ function create(opts) {
     log('READY read_state loaded: ' + entries.length + ' channels');
   }
 
+  function indexGuildChannels(guildId, channels) {
+    if (!channels || !channels.length) return;
+    var arr = [];
+    for (var i = 0; i < channels.length; i++) {
+      var c = channels[i];
+      if (!c || !c.id) continue;
+      // Text-like types only (0 = text, 5 = announcement, 15 = forum, 11/12 = threads).
+      // We aggregate any channel that can have unread, which mirrors Discord's UI.
+      arr.push({
+        channelId: String(c.id),
+        lastMessageId: String(c.last_message_id || '0')
+      });
+    }
+    guildIndex[String(guildId)] = arr;
+  }
+
+  function ingestReadyGuilds(d) {
+    if (!d || !d.guilds) return;
+    for (var i = 0; i < d.guilds.length; i++) {
+      var g = d.guilds[i];
+      if (!g || !g.id) continue;
+      indexGuildChannels(g.id, g.channels);
+    }
+    log('READY guilds indexed: ' + d.guilds.length);
+  }
+
+  function recipientLabel(r) {
+    if (!r) return '';
+    return r.global_name || r.username || ('user');
+  }
+
+  // Resolve a recipient id to a display name via the userMap; falls back to a
+  // generic "user" string. The id may be a string or number.
+  function userNameById(id) {
+    if (!id) return 'user';
+    var u = userMap[String(id)];
+    return recipientLabel(u) || 'user';
+  }
+
+  function ingestReadyUsers(d) {
+    var us = (d && d.users) || [];
+    for (var i = 0; i < us.length; i++) {
+      var u = us[i];
+      if (!u || !u.id) continue;
+      userMap[String(u.id)] = {
+        id: String(u.id),
+        global_name: u.global_name || null,
+        username: u.username || null
+      };
+    }
+    log('READY users indexed: ' + us.length);
+  }
+
+  function ingestPrivateChannel(c) {
+    if (!c || !c.id) return;
+    var name = '';
+    var recipientId = '';
+    if (c.type === 1) {
+      // 1:1 DM. Some payloads embed `recipients[]`, others only carry
+      // `recipient_ids[]` and rely on the global user map (READY's d.users).
+      var r = (c.recipients && c.recipients[0]) || null;
+      if (r) {
+        name = recipientLabel(r);
+        recipientId = String(r.id || '');
+        // Opportunistically stash the user in the global map.
+        if (r.id) userMap[String(r.id)] = r;
+      } else if (c.recipient_ids && c.recipient_ids.length) {
+        recipientId = String(c.recipient_ids[0]);
+        name = userNameById(recipientId);
+      } else {
+        name = 'user';
+      }
+    } else if (c.type === 3) {
+      // Group DM — explicit name if set, else comma-joined recipient names.
+      if (c.name) {
+        name = c.name;
+      } else if (c.recipients && c.recipients.length) {
+        var labels = [];
+        for (var i = 0; i < c.recipients.length && i < 4; i++) {
+          labels.push(recipientLabel(c.recipients[i]));
+          if (c.recipients[i] && c.recipients[i].id) userMap[String(c.recipients[i].id)] = c.recipients[i];
+        }
+        name = labels.join(', ');
+      } else if (c.recipient_ids && c.recipient_ids.length) {
+        var labels2 = [];
+        for (var j = 0; j < c.recipient_ids.length && j < 4; j++) {
+          labels2.push(userNameById(c.recipient_ids[j]));
+        }
+        name = labels2.join(', ');
+      } else {
+        name = 'Group';
+      }
+    } else {
+      return;       // ignore non-DM channels
+    }
+    dmMap[String(c.id)] = {
+      id: String(c.id),
+      type: c.type,
+      name: name,
+      lastMessageId: String(c.last_message_id || '0'),
+      recipientId: recipientId
+    };
+  }
+
+  function ingestReadyPrivateChannels(d) {
+    var list = (d && d.private_channels) || [];
+    for (var i = 0; i < list.length; i++) ingestPrivateChannel(list[i]);
+    log('READY DMs indexed: ' + list.length);
+  }
+
   function ingestMessageAck(d) {
     if (!d || !d.channel_id) return;
     var key = String(d.channel_id);
@@ -180,7 +311,13 @@ function create(opts) {
     if (t === 'READY') {
       sessionId = (d && d.session_id) || sessionId;
       resumeUrl = (d && d.resume_gateway_url) || resumeUrl;
+      if (d && d.user && d.user.id) myUserId = String(d.user.id);
       ingestReadyReadState(d);
+      ingestReadyGuilds(d);
+      // Users MUST be ingested before private_channels because the DM-name
+      // resolution looks them up in the user map.
+      ingestReadyUsers(d);
+      ingestReadyPrivateChannels(d);
       attempt = 0;             // success -> reset backoff
       setState('READY');
     } else if (t === 'READY_SUPPLEMENTAL') {
@@ -192,6 +329,31 @@ function create(opts) {
       ingestMessageAck(d);
     } else if (t === 'MESSAGE_CREATE') {
       ingestMessageCreate(d);
+      // Bump the channel's lastMessageId in whichever index it belongs to so
+      // server pings + DM sort stay current within a session.
+      if (d && d.channel_id && d.id) {
+        var cid = String(d.channel_id);
+        if (dmMap[cid]) dmMap[cid].lastMessageId = String(d.id);
+        for (var gid in guildIndex) {
+          if (!Object.prototype.hasOwnProperty.call(guildIndex, gid)) continue;
+          var arr = guildIndex[gid];
+          for (var i = 0; i < arr.length; i++) {
+            if (arr[i].channelId === cid) { arr[i].lastMessageId = String(d.id); break; }
+          }
+        }
+      }
+    } else if (t === 'CHANNEL_CREATE' || t === 'CHANNEL_UPDATE') {
+      // DM appears/changes mid-session
+      if (d && (d.type === 1 || d.type === 3)) ingestPrivateChannel(d);
+      // Guild channel appears/changes
+      else if (d && d.guild_id && d.id) {
+        var gid2 = String(d.guild_id);
+        var arr2 = guildIndex[gid2] || (guildIndex[gid2] = []);
+        var entry = null;
+        for (var j = 0; j < arr2.length; j++) if (arr2[j].channelId === String(d.id)) { entry = arr2[j]; break; }
+        if (!entry) { entry = { channelId: String(d.id), lastMessageId: '0' }; arr2.push(entry); }
+        if (d.last_message_id) entry.lastMessageId = String(d.last_message_id);
+      }
     }
     // ignore everything else
   }
@@ -318,6 +480,54 @@ function create(opts) {
       if (snowflakeGt(m, e.lastReadId)) e.lastReadId = m;
       e.mentionCount = 0;
       readMap[key] = e;
+    },
+    getMyUserId: function () { return myUserId; },
+    // Per-guild aggregate ping count: number of channels in the guild that are
+    // unread, with bonuses for mention_count entries. Capped reporting (1..9+)
+    // is the caller's job — this returns the raw aggregate.
+    getGuildStats: function (guildId) {
+      var arr = guildIndex[String(guildId)] || [];
+      var unreadChannels = 0;
+      var mentions = 0;
+      var mostRecent = '0';
+      for (var i = 0; i < arr.length; i++) {
+        var c = arr[i];
+        if (snowflakeGt(c.lastMessageId, mostRecent)) mostRecent = c.lastMessageId;
+        var rs = readMap[c.channelId];
+        if (!rs) continue;
+        if (snowflakeGt(c.lastMessageId, rs.lastReadId)) unreadChannels++;
+        if (rs.mentionCount > 0) mentions += rs.mentionCount;
+      }
+      return {
+        unreadChannels: unreadChannels,
+        mentionCount: mentions,
+        mostRecentMessageId: mostRecent
+      };
+    },
+    // All known DMs (1:1 and group), sorted newest-first.
+    getAllDMs: function () {
+      var out = [];
+      for (var id in dmMap) {
+        if (!Object.prototype.hasOwnProperty.call(dmMap, id)) continue;
+        var dm = dmMap[id];
+        var rs = readMap[id];
+        out.push({
+          id: dm.id,
+          type: dm.type,
+          name: dm.name,
+          lastMessageId: dm.lastMessageId,
+          recipientId: dm.recipientId,
+          mentionCount: rs ? (rs.mentionCount | 0) : 0,
+          unread: rs ? snowflakeGt(dm.lastMessageId, rs.lastReadId) : false
+        });
+      }
+      out.sort(function (a, b) {
+        if (a.lastMessageId.length !== b.lastMessageId.length) {
+          return b.lastMessageId.length - a.lastMessageId.length;
+        }
+        return a.lastMessageId < b.lastMessageId ? 1 : (a.lastMessageId > b.lastMessageId ? -1 : 0);
+      });
+      return out;
     },
     // Test seam: directly inject a parsed dispatch (e.g. simulate MESSAGE_ACK).
     _handleMessage: handleMessage,

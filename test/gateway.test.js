@@ -277,3 +277,164 @@ test('no token: start() does not open a socket', () => {
   assert.equal(harness.instances.length, 0);
   assert.equal(gw.getState(), 'DISCONNECTED');
 });
+
+// ---------------------------------------------------------------------------
+// v1.2 additions: per-guild stats + DM list + my user id
+// ---------------------------------------------------------------------------
+
+function helloAndReadyWithExtras(gw, harness, extras) {
+  extras = extras || {};
+  harness.last._open();
+  harness.last._recv({ op: 10, d: { heartbeat_interval: 41250 } });
+  harness.last._recv({
+    op: 0, t: 'READY', s: 1,
+    d: {
+      session_id: 'SID',
+      resume_gateway_url: 'wss://resume.gateway.discord.gg',
+      user: { id: 'ME', username: 'me' },
+      read_state: { entries: extras.entries || [] },
+      guilds: extras.guilds || [],
+      private_channels: extras.private_channels || []
+    }
+  });
+}
+
+test('READY captures my user id from d.user.id', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness);
+  assert.equal(gw.getMyUserId(), 'ME');
+});
+
+test('getGuildStats: zero unread when read_state matches lastMessageId', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    entries: [
+      { id: 'c1', last_message_id: '900', mention_count: 0 },
+      { id: 'c2', last_message_id: '800', mention_count: 0 }
+    ],
+    guilds: [{
+      id: 'G1', channels: [
+        { id: 'c1', last_message_id: '900' },
+        { id: 'c2', last_message_id: '800' }
+      ]
+    }]
+  });
+  const s = gw.getGuildStats('G1');
+  assert.equal(s.unreadChannels, 0);
+  assert.equal(s.mentionCount, 0);
+  assert.equal(s.mostRecentMessageId, '900');
+});
+
+test('getGuildStats: counts unread channels + sums mention_count across guild', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    entries: [
+      { id: 'c1', last_message_id: '900', mention_count: 2 },
+      { id: 'c2', last_message_id: '700', mention_count: 0 },
+      { id: 'c3', last_message_id: '500', mention_count: 1 }
+    ],
+    guilds: [{
+      id: 'G1', channels: [
+        { id: 'c1', last_message_id: '1000' },   // unread (1000 > 900)
+        { id: 'c2', last_message_id: '700' },    // read
+        { id: 'c3', last_message_id: '600' }     // unread (600 > 500)
+      ]
+    }]
+  });
+  const s = gw.getGuildStats('G1');
+  assert.equal(s.unreadChannels, 2);
+  assert.equal(s.mentionCount, 3);          // 2 + 1
+  assert.equal(s.mostRecentMessageId, '1000');
+});
+
+test('getGuildStats: returns zeros for unknown guild id', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness);
+  const s = gw.getGuildStats('NOPE');
+  assert.equal(s.unreadChannels, 0);
+  assert.equal(s.mentionCount, 0);
+});
+
+test('getAllDMs: 1:1 + group DMs from READY, sorted newest-first', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    entries: [
+      { id: 'dm2', last_message_id: '50', mention_count: 3 }
+    ],
+    private_channels: [
+      { id: 'dm1', type: 1, last_message_id: '100',
+        recipients: [{ id: 'u1', global_name: 'Alice', username: 'alice' }] },
+      { id: 'dm2', type: 1, last_message_id: '200',
+        recipients: [{ id: 'u2', username: 'bob' }] },
+      { id: 'dm3', type: 3, name: 'Friday Chat', last_message_id: '150',
+        recipients: [{ username: 'c' }, { username: 'd' }] }
+    ]
+  });
+  const dms = gw.getAllDMs();
+  assert.equal(dms.length, 3);
+  assert.equal(dms[0].id, 'dm2');           // newest
+  assert.equal(dms[0].name, 'bob');
+  assert.equal(dms[0].mentionCount, 3);
+  assert.equal(dms[0].unread, true);
+  assert.equal(dms[1].id, 'dm3');           // group middle
+  assert.equal(dms[1].name, 'Friday Chat');
+  assert.equal(dms[1].type, 3);
+  assert.equal(dms[2].id, 'dm1');
+  assert.equal(dms[2].name, 'Alice');
+});
+
+test('getAllDMs: group DM without name falls back to comma-joined recipients', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    private_channels: [
+      { id: 'g1', type: 3, last_message_id: '1',
+        recipients: [
+          { global_name: 'Alice' }, { global_name: 'Bob' }, { username: 'carol' }
+        ] }
+    ]
+  });
+  const dms = gw.getAllDMs();
+  assert.equal(dms[0].name, 'Alice, Bob, carol');
+});
+
+test('CHANNEL_CREATE for a new 1:1 DM adds it to the DM list mid-session', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness);
+  harness.last._recv({
+    op: 0, t: 'CHANNEL_CREATE', s: 2,
+    d: { id: 'dmX', type: 1, last_message_id: '999',
+         recipients: [{ id: 'uX', global_name: 'Dana' }] }
+  });
+  const dms = gw.getAllDMs();
+  assert.equal(dms.length, 1);
+  assert.equal(dms[0].name, 'Dana');
+});
+
+test('MESSAGE_CREATE bumps the channel lastMessageId in guildIndex + dmMap', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    entries: [{ id: 'c1', last_message_id: '900', mention_count: 0 }],
+    guilds: [{ id: 'G1', channels: [{ id: 'c1', last_message_id: '900' }] }],
+    private_channels: [{ id: 'dm1', type: 1, last_message_id: '100',
+                         recipients: [{ id: 'u1', global_name: 'Alice' }] }]
+  });
+  // New message in c1 — bumps it past lastReadId, becomes unread
+  harness.last._recv({ op: 0, t: 'MESSAGE_CREATE', s: 2,
+    d: { id: '1500', channel_id: 'c1', author: { id: 'X' } } });
+  assert.equal(gw.getGuildStats('G1').unreadChannels, 1);
+  assert.equal(gw.getGuildStats('G1').mostRecentMessageId, '1500');
+  // New message in dm1 — bumps lastMessageId in the dm map
+  harness.last._recv({ op: 0, t: 'MESSAGE_CREATE', s: 3,
+    d: { id: '2500', channel_id: 'dm1', author: { id: 'X' } } });
+  const dms = gw.getAllDMs();
+  assert.equal(dms[0].id, 'dm1');
+  assert.equal(dms[0].lastMessageId, '2500');
+});
