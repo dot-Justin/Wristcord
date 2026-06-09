@@ -18,7 +18,8 @@
     "capabilities": ["configurable"],
     "messageKeys": [
       "OP", "ID", "PAGE", "MORE", "COUNT", "TEXT", "ERR",
-      "READY", "SET_THEME", "SET_ACCENT", "SET_POLL", "HAS_TOKEN", "CONSENT", "ROWS"
+      "READY", "SET_THEME", "SET_ACCENT", "SET_POLL", "HAS_TOKEN", "CONSENT", "ROWS",
+      "SET_DM_COUNT", "SET_SERVER_COUNT"
     ],
     "resources": {
       "media": [
