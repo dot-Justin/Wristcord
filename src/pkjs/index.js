@@ -164,38 +164,49 @@ function buildRecords(op, id, extra) {
     });
   }
   if (op === OP_HOME) {
-    // OP_HOME payload comes pre-joined from the gateway (DMs, guild stats).
-    // The watch sends desired limits in p.PAGE high bits or separate keys; for
-    // now read them from a small inline structured payload. The router below
-    // passes opts.dmLimit/serverLimit; here we use defaults synced from settings.
+    // Fetch guilds, user settings, and DMs in parallel via REST so the home
+    // page populates as fast as the network allows — don't wait for the
+    // gateway. Read-state (mention count, unread flag) layers in from the
+    // gateway when it's ready; until then DMs show with all-read styling.
     var stng = loadSettings();
     var dmLimit = clampLimit(stng.dmCount, 3, 20);
     var serverLimit = clampLimit(stng.serverCount, 3, 20);
-    return client.guilds().then(function (g) {
+    return Promise.all([
+      client.guilds(),
+      client.userSettings(),
+      client.dmChannels()
+    ]).then(function (results) {
+      var g = results[0], s = results[1], d = results[2];
       if (g.status !== 200) return { err: mapStatusErr(g.status) };
-      return client.userSettings().then(function (s) {
-        var us = (s.status === 200 ? s.json : {}) || {};
-        var dms = (gateway.getState() === 'READY') ? gateway.getAllDMs() : [];
-        var rows = model.buildHomePage({
-          dms: dms,
-          guilds: g.json,
-          userSettings: us,
-          guildStats: gateway.getGuildStats,
-          dmLimit: dmLimit,
-          serverLimit: serverLimit
-        });
-        return { records: encodeHomeRows(rows) };
+      var us = (s.status === 200 ? s.json : {}) || {};
+      var restDms = (d.status === 200 && Array.isArray(d.json)) ? d.json : [];
+      var lookup = (gateway.getState() === 'READY') ? gateway.getReadState : null;
+      var dms = model.normalizeRestDms(restDms, lookup);
+      var rows = model.buildHomePage({
+        dms: dms,
+        guilds: g.json,
+        userSettings: us,
+        guildStats: gateway.getGuildStats,
+        dmLimit: dmLimit,
+        serverLimit: serverLimit
       });
+      return { records: encodeHomeRows(rows) };
     });
   }
   if (op === OP_DMS_ALL) {
-    var dmsAll = (gateway.getState() === 'READY') ? gateway.getAllDMs() : [];
-    return Promise.resolve({ records: dmsAll.map(function (dm) {
-      return ['D', dm.id, dm.name || '(unknown)',
-              require('./lib/color').nameToAccentHex(dm.name || dm.recipientId || dm.id),
-              String(dm.mentionCount | 0),
-              dm.unread ? '1' : '0'];
-    }) });
+    // Same fast path: REST is authoritative; gateway provides mention/unread
+    // overlay only.
+    var lookupAll = (gateway.getState() === 'READY') ? gateway.getReadState : null;
+    return client.dmChannels().then(function (d) {
+      if (d.status !== 200) return { err: mapStatusErr(d.status) };
+      var dmsAll = model.normalizeRestDms(d.json || [], lookupAll);
+      return { records: dmsAll.map(function (dm) {
+        return ['D', dm.id, dm.name || '(unknown)',
+                require('./lib/color').nameToAccentHex(dm.name || dm.recipientId || dm.id),
+                String(dm.mentionCount | 0),
+                dm.unread ? '1' : '0'];
+      }) };
+    });
   }
   if (op === OP_MSG_FULL) {
     var fullText = lastFullById[id] || '(message unavailable)';
@@ -229,7 +240,8 @@ function encodeHomeRows(rows) {
     if (r.kind === 'M') return ['M', r.section || ''];
     if (r.kind === 'g') return ['g', r.id, r.name || '', r.color || '', '',
                                 (r.memberColors || []).join(','),
-                                String(r.pingCount | 0), r.unread ? '1' : '0'];
+                                String(r.pingCount | 0), r.unread ? '1' : '0',
+                                r.mostRecent || '0', String(r.discordPos | 0)];
     return ['?'];
   });
 }

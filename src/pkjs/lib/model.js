@@ -323,6 +323,53 @@ function packMessages(messages, myUserId) {
   });
 }
 
+// Normalize a REST DM channel (from GET /users/@me/channels) to the same shape
+// gateway.getAllDMs() returns. Layers in unread/mention info from the gateway
+// readMap when available, so the page works even before READY.
+function normalizeRestDms(restDms, readStateLookup) {
+  function recipName(r) { return (r && (r.global_name || r.username)) || 'user'; }
+  function snowflakeGtLocal(a, b) {
+    if (!a) return false; if (!b) return true;
+    if (a.length !== b.length) return a.length > b.length;
+    return a > b;
+  }
+  var out = [];
+  for (var i = 0; i < restDms.length; i++) {
+    var c = restDms[i];
+    if (!c || (c.type !== 1 && c.type !== 3)) continue;
+    var name;
+    if (c.type === 1) {
+      name = recipName((c.recipients || [])[0]);
+    } else {
+      if (c.name) name = c.name;
+      else {
+        var labels = [];
+        for (var j = 0; j < (c.recipients || []).length && j < 4; j++) labels.push(recipName(c.recipients[j]));
+        name = labels.join(', ');
+      }
+    }
+    var lastMsg = String(c.last_message_id || '0');
+    var rs = (typeof readStateLookup === 'function') ? readStateLookup(c.id) : null;
+    var recipId = (c.recipients && c.recipients[0] && c.recipients[0].id) ? String(c.recipients[0].id) : '';
+    out.push({
+      id: String(c.id),
+      type: c.type,
+      name: name,
+      lastMessageId: lastMsg,
+      recipientId: recipId,
+      mentionCount: rs ? (rs.mentionCount | 0) : 0,
+      unread: rs ? snowflakeGtLocal(lastMsg, rs.lastReadId || '0') : false
+    });
+  }
+  out.sort(function (a, b) {
+    if (a.lastMessageId.length !== b.lastMessageId.length) {
+      return b.lastMessageId.length - a.lastMessageId.length;
+    }
+    return a.lastMessageId < b.lastMessageId ? 1 : (a.lastMessageId > b.lastMessageId ? -1 : 0);
+  });
+  return out;
+}
+
 /**
  * buildHomePage(opts) -> flat row array for the home page.
  *
@@ -373,33 +420,18 @@ function buildHomePage(opts) {
   }
 
   // ---- Server section ----
+  // We send ALL guilds (in Discord folder order) so the C side can re-sort by
+  // the user's chosen mode + local view counts + decide its own top-N cut. A
+  // trailing "Show all servers" row marks where the preview window ends; the
+  // C side uses serverLimit to slice the sorted list.
   rows.push({ kind: 'H', label: 'Servers', icon: 'server' });
-  // Use buildServerList for sort + folder structure, then keep only top N
-  // guilds AT THE TOP LEVEL (no folders inline in the preview — preview is a
-  // flat "most-recent N" list).
   var serverRows = buildServerList(opts.guilds || [], opts.userSettings || {});
-  // Strip folder rows: we only want guilds, sorted by most-recent message
-  // across their channels (from gateway). Fall back to original order for
-  // guilds we have no stats for.
   var guildOnly = serverRows.filter(function (r) { return r.kind === 'g'; });
-  if (typeof opts.guildStats === 'function') {
-    guildOnly.sort(function (a, b) {
-      var sa = opts.guildStats(a.id) || { mostRecentMessageId: '0' };
-      var sb = opts.guildStats(b.id) || { mostRecentMessageId: '0' };
-      var la = sa.mostRecentMessageId || '0';
-      var lb = sb.mostRecentMessageId || '0';
-      if (la.length !== lb.length) return lb.length - la.length;
-      return la < lb ? 1 : (la > lb ? -1 : 0);
-    });
-  }
-  var srvShown = Math.min(serverLimit, guildOnly.length);
-  for (var j = 0; j < srvShown; j++) {
+  for (var j = 0; j < guildOnly.length; j++) {
     var g = guildOnly[j];
     var st = (typeof opts.guildStats === 'function') ?
-             (opts.guildStats(g.id) || { unreadChannels: 0, mentionCount: 0 }) :
-             { unreadChannels: 0, mentionCount: 0 };
-    // Discord's server-icon badge shows mention count only — unread-without-
-    // mention shows nothing (channel-level dots in channel_list cover that).
+             (opts.guildStats(g.id) || { unreadChannels: 0, mentionCount: 0, mostRecentMessageId: '0' }) :
+             { unreadChannels: 0, mentionCount: 0, mostRecentMessageId: '0' };
     rows.push({
       kind: 'g',
       id: g.id,
@@ -407,11 +439,15 @@ function buildHomePage(opts) {
       color: g.color,
       memberColors: [],
       pingCount: st.mentionCount | 0,
-      unread: st.unreadChannels > 0      // kept for potential future use; C currently ignores
+      unread: st.unreadChannels > 0,
+      mostRecent: st.mostRecentMessageId || '0',
+      discordPos: j                    // 0..n-1, Discord's folder order
     });
   }
+  // The "Show all" marker tells the C side where the preview slice ends; the
+  // C side hides any 'g' rows after the limit when computing visible_count.
   if (guildOnly.length > serverLimit) {
-    rows.push({ kind: 'M', section: 'server' });
+    rows.push({ kind: 'M', section: 'server', limit: serverLimit });
   }
 
   return rows;
@@ -429,5 +465,6 @@ module.exports = {
   buildChannelTree: buildChannelTree,
   packMessages: packMessages,
   cleanText: cleanText,
-  buildHomePage: buildHomePage
+  buildHomePage: buildHomePage,
+  normalizeRestDms: normalizeRestDms
 };
