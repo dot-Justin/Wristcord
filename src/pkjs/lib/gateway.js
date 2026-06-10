@@ -354,6 +354,22 @@ function create(opts) {
         if (!entry) { entry = { channelId: String(d.id), lastMessageId: '0' }; arr2.push(entry); }
         if (d.last_message_id) entry.lastMessageId = String(d.last_message_id);
       }
+    } else if (t === 'GUILD_CREATE') {
+      // User joined a guild mid-session (or a guild that was unavailable at
+      // READY finished loading). Without this branch, MESSAGE_CREATE bumps
+      // for channels in this guild silently no-op because the guild has no
+      // index entry, leaving the guild absent from getGuildStats / the home
+      // page server preview until the next watchapp restart.
+      if (d && d.id && d.channels) {
+        indexGuildChannels(d.id, d.channels);
+        log('GUILD_CREATE indexed: ' + d.id);
+      }
+    } else if (t === 'GUILD_DELETE') {
+      // User left or was kicked. Drop the index entry so getAllGuilds reflects
+      // it; also clear any read_state entries for its channels (their channel
+      // ids will be reused if they rejoin later, but a stale entry doesn't
+      // hurt — readstate is keyed by channel id, not guild id).
+      if (d && d.id) delete guildIndex[String(d.id)];
     }
     // ignore everything else
   }

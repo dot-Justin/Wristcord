@@ -438,3 +438,40 @@ test('MESSAGE_CREATE bumps the channel lastMessageId in guildIndex + dmMap', () 
   assert.equal(dms[0].id, 'dm1');
   assert.equal(dms[0].lastMessageId, '2500');
 });
+
+test('GUILD_CREATE mid-session indexes the new guild', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness);     // READY with no guilds
+  // User joins a guild after READY
+  harness.last._recv({
+    op: 0, t: 'GUILD_CREATE', s: 2,
+    d: {
+      id: 'G_NEW',
+      channels: [
+        { id: 'c_new1', last_message_id: '5000' },
+        { id: 'c_new2', last_message_id: '0' }
+      ]
+    }
+  });
+  const stats = gw.getGuildStats('G_NEW');
+  assert.equal(stats.mostRecentMessageId, '5000');
+  assert.equal(stats.unreadChannels, 0);   // no read_state entries -> not unread per gateway
+  // A MESSAGE_CREATE in the new guild now updates its index
+  harness.last._recv({ op: 0, t: 'MESSAGE_CREATE', s: 3,
+    d: { id: '6000', channel_id: 'c_new1', author: { id: 'X' } } });
+  assert.equal(gw.getGuildStats('G_NEW').mostRecentMessageId, '6000');
+});
+
+test('GUILD_DELETE removes the guild from the index', () => {
+  const { gw, harness } = setupGateway();
+  gw.start();
+  helloAndReadyWithExtras(gw, harness, {
+    guilds: [{ id: 'G1', channels: [{ id: 'c1', last_message_id: '100' }] }]
+  });
+  assert.equal(gw.getGuildStats('G1').mostRecentMessageId, '100');
+  harness.last._recv({ op: 0, t: 'GUILD_DELETE', s: 2, d: { id: 'G1' } });
+  // After delete, getGuildStats returns the zero-record (no channels indexed)
+  assert.equal(gw.getGuildStats('G1').mostRecentMessageId, '0');
+  assert.equal(gw.getGuildStats('G1').unreadChannels, 0);
+});
