@@ -215,12 +215,16 @@ static void on_rows_done(WcRow *rows, int count) {
   }
   if (s_count > 0 && at_bottom) {
     const char *newest = s_msgs[s_count - 1].id;
+    // Cross-session de-dupe: persisted readstate carries forward across app
+    // restarts and channel re-entries. If the watch has already marked this
+    // channel as read up to `newest`, the ACK was already sent (and Discord
+    // has propagated it) — no point re-sending.
+    bool was_unread = wc_readstate_is_unread(s_channel_id, newest);
     wc_readstate_mark(s_channel_id, newest);
     // Fire-and-forget gateway ACK so other Discord clients (phone/desktop)
     // reflect the read. Best-effort: outbox-busy/network failures are silent;
-    // the next gateway READY will reassert canonical truth either way. Only
-    // ACK each newest-id once per chat session to avoid spamming.
-    if (newest[0] && strncmp(newest, s_acked_id, sizeof(s_acked_id)) != 0) {
+    // the next gateway READY will reassert canonical truth either way.
+    if (was_unread && newest[0] && strncmp(newest, s_acked_id, sizeof(s_acked_id)) != 0) {
       DictionaryIterator *out;
       if (app_message_outbox_begin(&out) == APP_MSG_OK && out) {
         dict_write_uint8(out,   MESSAGE_KEY_OP,   OP_ACK);
