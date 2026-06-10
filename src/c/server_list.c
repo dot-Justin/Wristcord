@@ -515,13 +515,30 @@ static void selection_will_change(struct MenuLayer *menu_layer, MenuIndex *new_i
   if (s_state != ST_READY) return;
   int want = new_index->row;
   if (want < 0 || want >= s_count) return;
-  // Direction inferred from old vs new
-  int dir = (new_index->row > old_index.row) ? 1 : (new_index->row < old_index.row ? -1 : 1);
+  // No-op when the index didn't actually move (focus-only events). Without
+  // this guard, hitting a header at row 0/last would still try to step in a
+  // default direction, which can shove the cursor unexpectedly.
+  if (new_index->row == old_index.row) return;
+  int dir = (new_index->row > old_index.row) ? 1 : -1;
+  // Step over consecutive header rows in the same direction.
   while (want >= 0 && want < s_count && s_rows[want].kind == WC_HROW_HEADER) {
     want += dir;
   }
+  // If the search ran off the end (e.g., the user landed on a trailing
+  // header with no selectable rows past it), back up the other way to find
+  // the nearest selectable row instead of clamping to a header.
+  if (want < 0 || want >= s_count || s_rows[want].kind == WC_HROW_HEADER) {
+    want = new_index->row;
+    int back = -dir;
+    while (want >= 0 && want < s_count && s_rows[want].kind == WC_HROW_HEADER) {
+      want += back;
+    }
+  }
   if (want < 0) want = 0;
   if (want >= s_count) want = s_count - 1;
+  // Final guard: if even after both passes we'd land on a header (degenerate
+  // home page with only headers), leave the cursor where it was.
+  if (s_rows[want].kind == WC_HROW_HEADER) want = old_index.row;
   new_index->row = want;
 }
 
